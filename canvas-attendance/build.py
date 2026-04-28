@@ -17,7 +17,7 @@ args = [
     "app.py",
 ]
 if sys.platform != "darwin":
-    args.insert(2, "--onefile")  # Windows: single .exe; macOS: .app bundle
+    args.insert(3, "--onefile")  # Windows: single .exe; macOS: .app bundle
 
 subprocess.check_call(args)
 print("\nBuild klaar. Je vindt de output in de map dist/.")
