@@ -40,7 +40,7 @@ jobs:
         run: |
           cd canvas-attendance/dist
           if [ "${{ runner.os }}" = "macOS" ]; then
-            zip -r "Stipt Local - macOS.zip" "Stipt Local.app"
+            ditto -c -k --keepParent "Stipt Local.app" "Stipt Local - macOS.zip"
           else
             mv "Stipt Local.exe" "Stipt Local - Windows.exe"
           fi
