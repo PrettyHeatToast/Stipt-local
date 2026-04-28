@@ -9,10 +9,10 @@ subprocess.check_call([
     sys.executable, "-m", "PyInstaller",
     "--onefile", "--noconsole",
     "--name", "Stipt Local",
-    "--add-data", "templates;templates",
+    "--add-data", f"templates{os.pathsep}templates",
     "--collect-all", "icalendar",
     "--collect-all", "webview",
-    "--hidden-import", "keyring.backends.Windows",
+    "--hidden-import", "keyring.backends.macOS" if sys.platform == "darwin" else "keyring.backends.Windows",
     "app.py",
 ])
 print("\nBuild klaar. Je vindt Stipt Local.exe in de map dist\\.")

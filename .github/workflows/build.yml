@@ -1,0 +1,57 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows
+            artifact: "Stipt Local.exe"
+          - os: macos-latest
+            label: macos
+            artifact: "Stipt Local"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r canvas-attendance/requirements.txt
+
+      - name: Build
+        run: python canvas-attendance/build.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stipt-local-${{ matrix.label }}
+          path: "canvas-attendance/dist/${{ matrix.artifact }}"
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/stipt-local-windows/Stipt Local.exe
+            dist/stipt-local-macos/Stipt Local
