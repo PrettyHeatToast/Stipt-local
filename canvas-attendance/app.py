@@ -1,31 +1,30 @@
 import os
 import re
 import sys
+import socket
+import time
 import datetime
-import webbrowser
-from threading import Timer
+import threading
 from flask import Flask, jsonify, request, render_template
 import requests
-from dotenv import load_dotenv
+import keyring
 from icalendar import Calendar
 
 if getattr(sys, 'frozen', False):
-    _base_dir = os.path.dirname(sys.executable)
     _template_folder = os.path.join(sys._MEIPASS, 'templates')
 else:
-    _base_dir = os.path.dirname(os.path.abspath(__file__))
-    _template_folder = os.path.join(_base_dir, 'templates')
-
-load_dotenv(os.path.join(_base_dir, '.env'))
+    _template_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
 
 app = Flask(__name__, template_folder=_template_folder)
 
+_SERVICE = "StiptLocal"
+_flask_error = None
+
 def _load_credentials():
-    load_dotenv(os.path.join(_base_dir, '.env'), override=True)
     return (
-        os.getenv("CANVAS_API_TOKEN", ""),
-        os.getenv("CANVAS_BASE_URL", "").rstrip("/"),
-        os.getenv("ICAL_URL", ""),
+        keyring.get_password(_SERVICE, "canvas_api_token") or "",
+        (keyring.get_password(_SERVICE, "canvas_base_url") or "").rstrip("/"),
+        keyring.get_password(_SERVICE, "ical_url") or "",
     )
 
 CANVAS_API_TOKEN, CANVAS_BASE_URL, ICAL_URL = _load_credentials()
@@ -463,19 +462,54 @@ def save_config():
     ical_url = data.get("ical_url", "").strip()           # optional
     if not token or not base_url:
         return jsonify({"error": "Beide velden zijn verplicht."}), 400
-    env_path = os.path.join(_base_dir, '.env')
-    with open(env_path, 'w') as f:
-        f.write(f"CANVAS_API_TOKEN={token}\n")
-        f.write(f"CANVAS_BASE_URL={base_url}\n")
-        f.write(f"ICAL_URL={ical_url}\n")
+    keyring.set_password(_SERVICE, "canvas_api_token", token)
+    keyring.set_password(_SERVICE, "canvas_base_url", base_url)
+    keyring.set_password(_SERVICE, "ical_url", ical_url)
     CANVAS_API_TOKEN, CANVAS_BASE_URL, ICAL_URL = _load_credentials()
     return jsonify({"success": True})
 
 
-def open_browser():
-    webbrowser.open("http://localhost:5050")
+def _run_flask():
+    global _flask_error
+    try:
+        app.run(port=5050, debug=False, use_reloader=False)
+    except Exception as exc:
+        _flask_error = str(exc)
 
+def _wait_for_port(port, timeout=10):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                return True
+        except OSError:
+            time.sleep(0.05)
+    return False
 
 if __name__ == "__main__":
-    Timer(1.0, open_browser).start()
-    app.run(port=5050, debug=False)
+    if getattr(sys, 'frozen', False) or os.environ.get("STIPT_WEBVIEW"):
+        import webview
+        t = threading.Thread(target=_run_flask, daemon=True)
+        t.start()
+        if not _wait_for_port(5050):
+            import tkinter
+            import tkinter.messagebox
+            tkinter.Tk().withdraw()
+            tkinter.messagebox.showerror(
+                "Stipt. Local",
+                f"Kon de server niet starten.\n{_flask_error or 'Poort 5050 is bezet.'}",
+            )
+            sys.exit(1)
+        webview.create_window(
+            "Stipt. Local",
+            "http://localhost:5050",
+            width=1100,
+            height=800,
+            min_size=(800, 600),
+        )
+        webview.start()
+    else:
+        import webbrowser
+        from threading import Timer
+        Timer(1.0, lambda: webbrowser.open("http://localhost:5050")).start()
+        app.run(port=5050, debug=False)

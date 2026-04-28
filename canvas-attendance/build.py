@@ -11,7 +11,8 @@ subprocess.check_call([
     "--name", "Stipt Local",
     "--add-data", "templates;templates",
     "--collect-all", "icalendar",
+    "--collect-all", "webview",
+    "--hidden-import", "keyring.backends.Windows",
     "app.py",
 ])
 print("\nBuild klaar. Je vindt Stipt Local.exe in de map dist\\.")
-print("Zet je .env bestand naast de .exe voor je hem start.")
