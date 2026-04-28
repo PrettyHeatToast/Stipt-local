@@ -5,17 +5,23 @@ import socket
 import time
 import datetime
 import threading
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, send_from_directory
 import requests
 import keyring
 from icalendar import Calendar
 
 if getattr(sys, 'frozen', False):
     _template_folder = os.path.join(sys._MEIPASS, 'templates')
+    _icon_dir = sys._MEIPASS
 else:
     _template_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
+    _icon_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
 app = Flask(__name__, template_folder=_template_folder)
+
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(_icon_dir, 'ahs.ico')
 
 _SERVICE = "StiptLocal"
 _flask_error = None
@@ -35,6 +41,15 @@ session_state = {
     "course_id": None,
     "current_pin": None,
 }
+
+_pip_state: dict = {
+    "pin": "0000",
+    "seconds_left": 30,
+    "total_seconds": 30,
+    "session_seconds": 600,
+}
+_pip_window = None
+_main_window = None
 
 
 def canvas_get(path, params=None):
@@ -63,7 +78,22 @@ def canvas_get(path, params=None):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    is_native = bool(getattr(sys, "frozen", False) or os.environ.get("STIPT_WEBVIEW"))
+    return render_template("index.html", is_native=is_native)
+
+
+@app.route("/pip")
+def pip_page():
+    return render_template("pip.html")
+
+
+@app.route("/api/pip/state", methods=["GET", "POST"])
+def pip_state_route():
+    global _pip_state
+    if request.method == "POST":
+        _pip_state.update(request.get_json(silent=True) or {})
+        return jsonify({"ok": True})
+    return jsonify(_pip_state)
 
 
 @app.route("/api/courses")
@@ -200,6 +230,8 @@ def create_quiz(course_id):
             "quiz_settings": {
                 "require_student_access_code": True,
                 "student_access_code": pin,
+                "filter_ip_address": True,
+                "ip_address_filter": "193.191.137.192/26"
             },
         }
     }
@@ -252,9 +284,8 @@ def create_quiz(course_id):
             f"/api/v1/courses/{course_id}/assignments",
             {"search_term": title, "per_page": 10},
         )
-        assignment_id = next(
-            (a["id"] for a in assignments if a.get("name") == title), None
-        )
+        matching = [a for a in assignments if a.get("name") == title]
+        assignment_id = max(matching, key=lambda a: a["id"])["id"] if matching else None
         if not assignment_id:
             raise ValueError(f"Kon het Canvas-assignment voor '{title}' niet vinden na aanmaken quiz.")
 
@@ -486,6 +517,37 @@ def _wait_for_port(port, timeout=10):
             time.sleep(0.05)
     return False
 
+class JsApi:
+    def open_pip(self):
+        global _pip_window, _main_window
+        if _pip_window and _pip_window in webview.windows:
+            _pip_window.show()
+            return
+        _pip_window = webview.create_window(
+            "Stipt PIN",
+            "http://localhost:5050/pip",
+            width=380,
+            height=260,
+            resizable=False,
+            on_top=True,
+        )
+        def _on_closed():
+            global _pip_window
+            _pip_window = None
+            if _main_window:
+                _main_window.evaluate_js("pipNativeOpen = false; updatePipBtn();")
+        _pip_window.events.closed += _on_closed
+
+    def close_pip(self):
+        global _pip_window
+        if _pip_window:
+            _pip_window.destroy()
+            _pip_window = None
+
+    def is_pip_open(self):
+        return _pip_window is not None and _pip_window in webview.windows
+
+
 if __name__ == "__main__":
     if getattr(sys, 'frozen', False) or os.environ.get("STIPT_WEBVIEW"):
         import webview
@@ -500,13 +562,24 @@ if __name__ == "__main__":
                 f"Kon de server niet starten.\n{_flask_error or 'Poort 5050 is bezet.'}",
             )
             sys.exit(1)
-        webview.create_window(
+        _main_window = webview.create_window(
             "Stipt. Local",
             "http://localhost:5050",
             width=1100,
             height=800,
             min_size=(800, 600),
+            js_api=JsApi(),
         )
+
+        def _on_main_closing():
+            if session_state.get("quiz_assignment_id"):
+                return _main_window.evaluate_js(
+                    "confirm('Er is nog een actieve check-in sessie.\\n\\n"
+                    "Wil je de app toch afsluiten? "
+                    "Studenten kunnen daarna de quiz niet meer indienen.')"
+                )
+
+        _main_window.events.closing += _on_main_closing
         webview.start()
     else:
         import webbrowser
