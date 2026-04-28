@@ -574,6 +574,36 @@
       font-size: .95rem;
     }
     .field input:focus { outline: 2px solid var(--color-primary); border-color: transparent; }
+
+    /* ── PiP fallback floating dialog ── */
+    #pip-fallback-dialog {
+      position: fixed; bottom: 1rem; right: 1rem; top: auto; left: auto;
+      margin: 0; padding: 0; border: none; background: transparent;
+      z-index: 9999;
+    }
+    #pip-fallback-dialog::backdrop { display: none; }
+    .pip-fb-card {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-lg);
+      padding: var(--space-4);
+      box-shadow: var(--shadow-lg);
+      display: flex; flex-direction: column; align-items: center; gap: var(--space-3);
+      min-width: 320px;
+    }
+    .pip-fb-header {
+      display: flex; align-items: center; justify-content: space-between; width: 100%;
+    }
+    .pip-fb-inner {
+      display: flex; align-items: center; gap: var(--space-6);
+    }
+    .pip-fb-footer {
+      display: flex; align-items: center; gap: .5rem;
+      padding-top: var(--space-2); border-top: 1px solid var(--color-border);
+      width: 100%; justify-content: center;
+    }
+    .pip-fb-ring { fill: none; stroke-width: 6; stroke-linecap: round; transition: stroke-dashoffset 1s linear, stroke .5s ease; }
+    .pip-fb-track { fill: none; stroke: var(--color-border); stroke-width: 6; }
   </style>
 </head>
 <body>
@@ -929,10 +959,12 @@ const PIP_R    = 36;
 const PIP_CIRC = 2 * Math.PI * PIP_R;
 
 async function togglePip() {
+  const fallbackDialog = document.getElementById('pip-fallback-dialog');
   if (pipWindow) { pipWindow.close(); return; }
+  if (fallbackDialog && fallbackDialog.open) { closePipFallback(); return; }
 
   if (!('documentPictureInPicture' in window)) {
-    showBanner('pin-update-error', 'Document Picture-in-Picture wordt niet ondersteund door deze browser (vereist Chrome 116+).');
+    openPipFallback();
     return;
   }
 
@@ -970,9 +1002,11 @@ function updatePipBtn() {
   const btn   = document.getElementById('pip-btn');
   const label = document.getElementById('pip-btn-label');
   if (!btn) return;
-  btn.classList.toggle('active', !!pipWindow);
-  label.textContent = pipWindow ? 'Sluit zwevend venster' : 'Zwevend venster';
-  btn.setAttribute('aria-label', pipWindow ? 'Zwevend venster sluiten' : 'Zwevend venster openen');
+  const fallbackDialog = document.getElementById('pip-fallback-dialog');
+  const isActive = !!pipWindow || (fallbackDialog && fallbackDialog.open);
+  btn.classList.toggle('active', isActive);
+  label.textContent = isActive ? 'Sluit zwevend venster' : 'Zwevend venster';
+  btn.setAttribute('aria-label', isActive ? 'Zwevend venster sluiten' : 'Zwevend venster openen');
 }
 
 function syncPip() {
@@ -1000,6 +1034,47 @@ function syncPipSessionTimer(s) {
   el.textContent = formatTime(s);
   el.classList.toggle('warning', s <= 120 && s > 60);
   el.classList.toggle('urgent',  s <= 60);
+}
+
+// ── PiP fallback (non-Document-PiP contexts, e.g. WebView2) ────────
+const PIP_FB_CIRC = 2 * Math.PI * 36;
+
+function openPipFallback() {
+  const dialog = document.getElementById('pip-fallback-dialog');
+  if (!dialog) return;
+  syncPipFallback();
+  dialog.show();
+  updatePipBtn();
+}
+
+function closePipFallback() {
+  const dialog = document.getElementById('pip-fallback-dialog');
+  if (dialog) dialog.close();
+  updatePipBtn();
+}
+
+function syncPipFallback() {
+  const dialog = document.getElementById('pip-fallback-dialog');
+  if (!dialog || !dialog.open) return;
+  const pin = state.currentPin || '0000';
+  for (let i = 0; i < 4; i++) {
+    const el = document.getElementById(`pfb-d${i}`);
+    if (el) el.textContent = pin[i] || '0';
+  }
+  const s    = state.countdownSeconds;
+  const ring = document.getElementById('pfb-ring');
+  const text = document.getElementById('pfb-text');
+  if (ring && text) {
+    text.textContent = formatTime(s);
+    ring.style.strokeDashoffset = PIP_FB_CIRC * (1 - s / TOTAL);
+    ring.style.stroke = s > 300 ? 'var(--color-success)' : s > 120 ? 'var(--color-warning)' : 'var(--color-error)';
+  }
+  const sessionEl = document.getElementById('pfb-session-timer');
+  if (sessionEl) {
+    sessionEl.textContent = formatTime(state.sessionSeconds);
+    sessionEl.classList.toggle('warning', state.sessionSeconds <= 120 && state.sessionSeconds > 60);
+    sessionEl.classList.toggle('urgent',  state.sessionSeconds <= 60);
+  }
 }
 
 function pipCSS() {
@@ -1345,6 +1420,7 @@ function setPinDisplay(pin) {
       if (el) el.textContent = pin[i] || '0';
     }
   }
+  syncPipFallback();
 }
 
 async function rotatePin() {
@@ -1434,6 +1510,7 @@ function updateCountdownUI(s) {
       pipRing.style.stroke = color;
     }
   }
+  syncPipFallback();
 }
 
 // ── Students ───────────────────────────────────────────────────────
@@ -1553,9 +1630,9 @@ function renderTable() {
       <td>
         <div class="actions-cell">
           <button class="btn-icon" aria-label="Verhoog aanwezigheid voor ${escHtml(name)}"
-            onclick="changeScore(${uid}, 1)" ${score >= 1 ? 'disabled' : ''}>+</button>
+            data-uid="${uid}" data-delta="1" ${score >= 1 ? 'disabled' : ''}>+</button>
           <button class="btn-icon" aria-label="Verlaag aanwezigheid voor ${escHtml(name)}"
-            onclick="changeScore(${uid}, -1)" ${score <= 0 ? 'disabled' : ''}>−</button>
+            data-uid="${uid}" data-delta="-1" ${score <= 0 ? 'disabled' : ''}>−</button>
         </div>
       </td>
     </tr>`;
@@ -1570,7 +1647,7 @@ function scoreInfo(score) {
   return               { label: 'Afwezig',      cls: 'badge-absent' };
 }
 
-window.changeScore = function(uid, delta) {
+function changeScore(uid, delta) {
   const steps = [0, 0.5, 1];
   const cur = state.attendance[uid] ?? 0;
   const idx = steps.indexOf(cur);
@@ -1591,7 +1668,7 @@ window.changeScore = function(uid, delta) {
       }),
     }).catch(e => showBanner('pin-update-error', `Grade update mislukt: ${e.message}`));
   }
-};
+}
 
 function updateSummary() {
   let present = 0, partial = 0, absent = 0;
@@ -1642,6 +1719,13 @@ document.getElementById('th-status').addEventListener('keydown', e => {
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); applySort('status'); }
 });
 
+// ── Score buttons (delegated) ──────────────────────────────────────
+document.getElementById('students-tbody').addEventListener('click', e => {
+  const btn = e.target.closest('[data-uid]');
+  if (!btn) return;
+  changeScore(parseInt(btn.dataset.uid, 10), parseInt(btn.dataset.delta, 10));
+});
+
 // ── Filter ─────────────────────────────────────────────────────────
 document.getElementById('student-search').addEventListener('input', e => {
   state.studentFilter = e.target.value;
@@ -1664,7 +1748,9 @@ async function endSession() {
   if (state.countdownInterval) { clearInterval(state.countdownInterval); state.countdownInterval = null; }
   if (state.sessionInterval)   { clearInterval(state.sessionInterval);   state.sessionInterval = null; }
   document.getElementById('end-confirm').classList.remove('show');
-  if (pipWindow) { pipWindow.close(); pipWindow = null; updatePipBtn(); }
+  if (pipWindow) { pipWindow.close(); pipWindow = null; }
+  closePipFallback();
+  updatePipBtn();
 
   // Rename and unpublish the quiz in Canvas (best-effort)
   try { await apiFetch('/api/session/end', { method: 'POST' }); } catch (_) {}
@@ -1749,5 +1835,35 @@ function escHtml(s) {
   onScreenEnter(screen);
 })();
 </script>
+
+<!-- ── PiP fallback: floating dialog for non-Document-PiP contexts ── -->
+<dialog id="pip-fallback-dialog" aria-label="Zwevend PIN-venster">
+  <div class="pip-fb-card">
+    <div class="pip-fb-header">
+      <p class="pin-label" style="margin:0">Toegangscode voor studenten</p>
+      <button class="btn btn-ghost btn-pip" onclick="closePipFallback()" aria-label="Sluit zwevend venster">✕</button>
+    </div>
+    <div class="pip-fb-inner">
+      <div class="pin-display" aria-live="polite">
+        <div class="pin-digit" id="pfb-d0">0</div>
+        <div class="pin-digit" id="pfb-d1">0</div>
+        <div class="pin-digit" id="pfb-d2">0</div>
+        <div class="pin-digit" id="pfb-d3">0</div>
+      </div>
+      <div class="countdown-wrap" style="width:80px;height:80px" aria-hidden="true">
+        <svg class="countdown-svg" width="80" height="80" viewBox="0 0 80 80">
+          <circle class="pip-fb-track" cx="40" cy="40" r="36"/>
+          <circle class="pip-fb-ring" id="pfb-ring" cx="40" cy="40" r="36"
+            stroke-dasharray="226.19" stroke-dashoffset="0" stroke="var(--color-success)"/>
+        </svg>
+        <div class="countdown-text" id="pfb-text" style="font-size:var(--text-sm)">00:30</div>
+      </div>
+    </div>
+    <div class="pip-fb-footer">
+      <span class="pin-label" style="margin:0">Check-in sluit over</span>
+      <span class="session-timer-value" id="pfb-session-timer">10:00</span>
+    </div>
+  </div>
+</dialog>
 </body>
 </html>
