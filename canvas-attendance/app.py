@@ -1,10 +1,13 @@
 import os
+import re
 import sys
+import datetime
 import webbrowser
 from threading import Timer
 from flask import Flask, jsonify, request, render_template
 import requests
 from dotenv import load_dotenv
+from icalendar import Calendar
 
 if getattr(sys, 'frozen', False):
     _base_dir = os.path.dirname(sys.executable)
@@ -19,9 +22,13 @@ app = Flask(__name__, template_folder=_template_folder)
 
 def _load_credentials():
     load_dotenv(os.path.join(_base_dir, '.env'), override=True)
-    return os.getenv("CANVAS_API_TOKEN", ""), os.getenv("CANVAS_BASE_URL", "").rstrip("/")
+    return (
+        os.getenv("CANVAS_API_TOKEN", ""),
+        os.getenv("CANVAS_BASE_URL", "").rstrip("/"),
+        os.getenv("ICAL_URL", ""),
+    )
 
-CANVAS_API_TOKEN, CANVAS_BASE_URL = _load_credentials()
+CANVAS_API_TOKEN, CANVAS_BASE_URL, ICAL_URL = _load_credentials()
 
 session_state = {
     "quiz_assignment_id": None,
@@ -65,12 +72,96 @@ def get_courses():
     try:
         courses = canvas_get("/api/v1/courses", {
             "enrollment_type": "teacher",
+            "enrollment_state": "active",
             "per_page": 100,
             "state[]": "available",
         })
-        return jsonify(courses)
+        return jsonify(_filter_current_year(courses))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+_YEAR_RE = re.compile(r'\b20\d{2}-\d{2}\b')
+
+def _current_academic_year() -> str:
+    """Return the current academic year as 'YYYY-YY' (e.g. '2025-26').
+    Semester starts in September: Aug and earlier → previous start year."""
+    today = datetime.date.today()
+    y = today.year
+    if today.month >= 9:
+        return f"{y}-{str(y + 1)[2:]}"
+    return f"{y - 1}-{str(y)[2:]}"
+
+def _filter_current_year(courses: list) -> list:
+    """Keep courses that either have no academic year in their name,
+    or whose year matches the current academic year."""
+    current = _current_academic_year()
+    result = []
+    for course in courses:
+        years = _YEAR_RE.findall(course.get("name") or "")
+        if not years or current in years:
+            result.append(course)
+    return result
+
+
+def _ical_matches(summary: str, course_name: str, course_code: str) -> bool:
+    """Return True when a TimeEdit SUMMARY and a Canvas course are likely the same course."""
+    if course_name and course_name in summary:
+        return True
+    if course_code and course_code in summary:
+        return True
+    # Any word ≥4 chars from the summary that appears in the course name/code
+    words = [w.strip(".,;:()") for w in summary.split()]
+    for word in words:
+        if len(word) >= 4 and (word in course_name or word in course_code):
+            return True
+    return False
+
+
+@app.route("/api/ical-suggestions")
+def get_ical_suggestions():
+    """Return Canvas courses that appear in today's iCal schedule. Fails silently → []."""
+    if not ICAL_URL:
+        return jsonify([])
+    today = datetime.date.today()
+    try:
+        resp = requests.get(ICAL_URL, timeout=5)
+        resp.raise_for_status()
+        cal = Calendar.from_ical(resp.content)
+        events_today = [
+            e for e in cal.walk('VEVENT')
+            if e.get('DTSTART') and e.decoded('DTSTART').date() == today
+        ]
+    except Exception:
+        return jsonify([])
+    summaries = [
+        str(e.get("SUMMARY", "")).strip().lower()
+        for e in events_today
+        if e.get("SUMMARY")
+    ]
+    if not summaries:
+        return jsonify([])
+    try:
+        courses = canvas_get("/api/v1/courses", {
+            "enrollment_type": "teacher",
+            "enrollment_state": "active",
+            "per_page": 100,
+            "state[]": "available",
+        })
+        courses = _filter_current_year(courses)
+    except Exception:
+        return jsonify([])
+    matched = []
+    for course in courses:
+        name = (course.get("name") or "").lower()
+        code = (course.get("course_code") or "").lower()
+        if any(_ical_matches(s, name, code) for s in summaries):
+            matched.append({
+                "id": course["id"],
+                "name": course.get("name", ""),
+                "course_code": course.get("course_code", ""),
+            })
+    return jsonify(matched)
 
 
 @app.route("/api/courses/<int:course_id>/sections")
@@ -254,7 +345,6 @@ def end_session():
         assign_resp.raise_for_status()
         current_title = assign_resp.json().get("name", "Aanwezigheid")
 
-        import datetime
         now = datetime.datetime.now()
         end_time = now.strftime("%H:%M")
         new_title = f"{current_title} (beëindigd {end_time})"
@@ -360,22 +450,25 @@ def get_config():
     return jsonify({
         "configured": bool(CANVAS_API_TOKEN and CANVAS_BASE_URL),
         "canvas_base_url": CANVAS_BASE_URL,
+        "ical_url": ICAL_URL,
     })
 
 
 @app.route("/api/config", methods=["POST"])
 def save_config():
-    global CANVAS_API_TOKEN, CANVAS_BASE_URL
+    global CANVAS_API_TOKEN, CANVAS_BASE_URL, ICAL_URL
     data = request.get_json()
-    token = data.get("canvas_api_token", "").strip()
+    token    = data.get("canvas_api_token", "").strip()
     base_url = data.get("canvas_base_url", "").strip().rstrip("/")
+    ical_url = data.get("ical_url", "").strip()           # optional
     if not token or not base_url:
         return jsonify({"error": "Beide velden zijn verplicht."}), 400
     env_path = os.path.join(_base_dir, '.env')
     with open(env_path, 'w') as f:
         f.write(f"CANVAS_API_TOKEN={token}\n")
         f.write(f"CANVAS_BASE_URL={base_url}\n")
-    CANVAS_API_TOKEN, CANVAS_BASE_URL = _load_credentials()
+        f.write(f"ICAL_URL={ical_url}\n")
+    CANVAS_API_TOKEN, CANVAS_BASE_URL, ICAL_URL = _load_credentials()
     return jsonify({"success": True})
 
 

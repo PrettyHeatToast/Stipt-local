@@ -10,6 +10,7 @@ subprocess.check_call([
     "--onefile", "--noconsole",
     "--name", "Stipt Local",
     "--add-data", "templates;templates",
+    "--collect-all", "icalendar",
     "app.py",
 ])
 print("\nBuild klaar. Je vindt Stipt Local.exe in de map dist\\.")
