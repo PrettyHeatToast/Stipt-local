@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Stipt. Local</title>
+  <link rel="icon" href="/favicon.ico" type="image/x-icon">
   <link rel="preconnect" href="https://api.fontshare.com">
   <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap" rel="stylesheet">
   <style>
@@ -863,6 +864,8 @@
 </div>
 
 <script>
+const IS_NATIVE = {{ is_native | tojson }};
+
 // ── State ──────────────────────────────────────────────────────────
 const state = {
   course: null,           // { id, name, course_code }
@@ -955,10 +958,23 @@ themeBtn.addEventListener('click', () => {
 
 // ── Document Picture-in-Picture ────────────────────────────────────
 let pipWindow = null;
+let pipNativeOpen = false;
 const PIP_R    = 36;
 const PIP_CIRC = 2 * Math.PI * PIP_R;
 
 async function togglePip() {
+  if (IS_NATIVE && window.pywebview) {
+    if (pipNativeOpen) {
+      await window.pywebview.api.close_pip();
+      pipNativeOpen = false;
+    } else {
+      await window.pywebview.api.open_pip();
+      pipNativeOpen = true;
+      syncNativePip();
+    }
+    updatePipBtn();
+    return;
+  }
   const fallbackDialog = document.getElementById('pip-fallback-dialog');
   if (pipWindow) { pipWindow.close(); return; }
   if (fallbackDialog && fallbackDialog.open) { closePipFallback(); return; }
@@ -1003,7 +1019,7 @@ function updatePipBtn() {
   const label = document.getElementById('pip-btn-label');
   if (!btn) return;
   const fallbackDialog = document.getElementById('pip-fallback-dialog');
-  const isActive = !!pipWindow || (fallbackDialog && fallbackDialog.open);
+  const isActive = !!pipWindow || pipNativeOpen || (fallbackDialog && fallbackDialog.open);
   btn.classList.toggle('active', isActive);
   label.textContent = isActive ? 'Sluit zwevend venster' : 'Zwevend venster';
   btn.setAttribute('aria-label', isActive ? 'Zwevend venster sluiten' : 'Zwevend venster openen');
@@ -1028,12 +1044,27 @@ function syncPip() {
 }
 
 function syncPipSessionTimer(s) {
+  syncNativePip();
   if (!pipWindow) return;
   const el = pipWindow.document.getElementById('pip-session-timer');
   if (!el) return;
   el.textContent = formatTime(s);
   el.classList.toggle('warning', s <= 120 && s > 60);
   el.classList.toggle('urgent',  s <= 60);
+}
+
+function syncNativePip() {
+  if (!pipNativeOpen) return;
+  fetch('/api/pip/state', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      pin: state.currentPin || '0000',
+      seconds_left: state.countdownSeconds,
+      total_seconds: TOTAL,
+      session_seconds: state.sessionSeconds,
+    }),
+  }).catch(() => {});
 }
 
 // ── PiP fallback (non-Document-PiP contexts, e.g. WebView2) ────────
@@ -1421,6 +1452,7 @@ function setPinDisplay(pin) {
     }
   }
   syncPipFallback();
+  syncNativePip();
 }
 
 async function rotatePin() {
@@ -1511,6 +1543,7 @@ function updateCountdownUI(s) {
     }
   }
   syncPipFallback();
+  syncNativePip();
 }
 
 // ── Students ───────────────────────────────────────────────────────

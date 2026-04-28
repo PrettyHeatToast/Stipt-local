@@ -18,6 +18,29 @@ python app.py          # opens http://localhost:5050 automatically
 
 On first run (no `.env`), the app shows a setup screen to enter Canvas credentials. These are saved to `.env` next to the running file.
 
+## Versioning
+
+Version is stored in `canvas-attendance/version_info.txt` — a PyInstaller Windows resource file. Two places must stay in sync when bumping:
+
+```text
+filevers=(1, 0, 0, 0)        # Windows 4-tuple
+prodvers=(1, 0, 0, 0)
+...
+StringStruct(u'FileVersion',  u'1.0.0.0')
+StringStruct(u'ProductVersion', u'1.0.0.0')
+```
+
+There is no `__version__` in Python code; `version_info.txt` is the single source of truth. The version is embedded in the Windows `.exe` properties only — it is not displayed in the UI.
+
+### Releasing a new version
+
+1. Edit `canvas-attendance/version_info.txt` — update both tuples and both strings.
+2. Commit the change.
+3. Push a git tag matching `v*` (e.g. `v1.1`).
+4. GitHub Actions (`.github/workflows/build.yml`) detects the tag, builds Windows + macOS artifacts, and creates a GitHub Release automatically.
+
+> **For future agents:** bump the version in `version_info.txt` whenever you make a change that warrants a release — patch for bug fixes, minor for new features, major for breaking changes. Use the `v<major>.<minor>` tag convention (no patch in the tag, but keep the full 4-tuple in the file for Windows compatibility).
+
 ## Canvas API notes
 
 - Uses **New Quizzes** API (`/api/quiz/v1/...`) for quiz creation and access code updates, and the classic Assignments API (`/api/v1/...`) for publishing, overrides, grades, and enrollments.

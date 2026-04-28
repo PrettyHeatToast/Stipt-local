@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>PIN – Stipt. Local</title>
+<link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap">
+<style>
+:root{--color-bg:#FAF8F3;--color-surface:#FFFFFF;--color-surface-alt:#F2EDE4;--color-border:#E4DDD1;--color-text:#1C1916;--color-text-secondary:#5C5650;--color-success:#16A34A;--color-warning:#D97706;--color-error:#DC2626;--text-sm:.8125rem;--text-xs:.75rem;--text-2xl:2rem;--space-2:.5rem;--space-3:.75rem;--space-4:1rem;--radius:10px}
+[data-theme=dark]{--color-bg:#18160F;--color-surface:#221F18;--color-surface-alt:#2C2820;--color-border:#3A352B;--color-text:#F2EDE4;--color-text-secondary:#9B9188;--color-success:#22C55E;--color-warning:#F59E0B;--color-error:#EF4444}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;font-family:'Satoshi',system-ui,sans-serif;background:var(--color-bg);color:var(--color-text)}
+.pip-root{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:var(--space-3);padding:var(--space-4)}
+.pip-label{font-size:var(--text-xs);font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--color-text-secondary)}
+.pip-inner{display:flex;align-items:center;gap:1.5rem}
+.pin-display{display:flex;gap:.5rem}
+.pin-digit{width:54px;height:66px;display:flex;align-items:center;justify-content:center;font-size:var(--text-2xl);font-weight:700;font-family:'SF Mono','Fira Code',monospace;background:var(--color-surface-alt);border:2px solid var(--color-border);border-radius:var(--radius);color:var(--color-text)}
+.cw{position:relative;width:80px;height:80px;display:flex;align-items:center;justify-content:center}
+.cw svg{transform:rotate(-90deg)}
+.ct{fill:none;stroke:var(--color-border);stroke-width:6}
+.cr{fill:none;stroke-width:6;stroke-linecap:round;transition:stroke-dashoffset 1s linear,stroke .5s ease}
+.cx{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:var(--text-sm);font-weight:700;font-variant-numeric:tabular-nums}
+.pip-session{display:flex;align-items:center;gap:.5rem;padding-top:var(--space-2);border-top:1px solid var(--color-border);width:100%;justify-content:center}
+.pip-st{font-size:var(--text-sm);font-weight:700;font-variant-numeric:tabular-nums;color:var(--color-text);transition:color .4s}
+.pip-st.warning{color:var(--color-warning)}.pip-st.urgent{color:var(--color-error)}
+</style>
+</head>
+<body>
+<div class="pip-root">
+  <div class="pip-label">Toegangscode voor studenten</div>
+  <div class="pip-inner">
+    <div class="pin-display">
+      <div class="pin-digit" id="pip-d0">0</div>
+      <div class="pin-digit" id="pip-d1">0</div>
+      <div class="pin-digit" id="pip-d2">0</div>
+      <div class="pin-digit" id="pip-d3">0</div>
+    </div>
+    <div class="cw">
+      <svg width="80" height="80" viewBox="0 0 80 80">
+        <circle class="ct" cx="40" cy="40" r="36"/>
+        <circle class="cr" id="pip-ring" cx="40" cy="40" r="36"
+          stroke-dasharray="226.19" stroke-dashoffset="0" stroke="var(--color-success)"/>
+      </svg>
+      <div class="cx" id="pip-text">00:30</div>
+    </div>
+  </div>
+  <div class="pip-session">
+    <span class="pip-label">Check-in sluit over&nbsp;</span>
+    <span class="pip-st" id="pip-session-timer">10:00</span>
+  </div>
+</div>
+<script>
+const PIP_R    = 36;
+const PIP_CIRC = 2 * Math.PI * PIP_R;
+
+function formatTime(s) {
+  const m   = Math.floor(s / 60).toString().padStart(2, '0');
+  const sec = (s % 60).toString().padStart(2, '0');
+  return `${m}:${sec}`;
+}
+
+async function poll() {
+  try {
+    const r     = await fetch('/api/pip/state');
+    const state = await r.json();
+
+    for (let i = 0; i < 4; i++) {
+      document.getElementById(`pip-d${i}`).textContent = (state.pin || '0000')[i] || '0';
+    }
+
+    const s     = state.seconds_left ?? 30;
+    const total = state.total_seconds || 30;
+    const color = s > 300 ? 'var(--color-success)' : s > 120 ? 'var(--color-warning)' : 'var(--color-error)';
+    const ring  = document.getElementById('pip-ring');
+    ring.style.strokeDashoffset = PIP_CIRC * (1 - s / total);
+    ring.style.stroke           = color;
+    document.getElementById('pip-text').textContent = formatTime(s);
+
+    const ss      = state.session_seconds ?? 600;
+    const sesEl   = document.getElementById('pip-session-timer');
+    sesEl.textContent = formatTime(ss);
+    sesEl.classList.toggle('warning', ss <= 120 && ss > 60);
+    sesEl.classList.toggle('urgent',  ss <= 60);
+  } catch (_) {}
+
+  setTimeout(poll, 500);
+}
+
+poll();
+</script>
+</body>
+</html>
