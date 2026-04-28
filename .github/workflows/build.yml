@@ -17,10 +17,10 @@ jobs:
         include:
           - os: windows-latest
             label: windows
-            artifact: "Stipt Local.exe"
+            release_artifact: "Stipt Local - Windows.exe"
           - os: macos-latest
             label: macos
-            artifact: "Stipt Local"
+            release_artifact: "Stipt Local - macOS.zip"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -35,11 +35,21 @@ jobs:
       - name: Build
         run: python canvas-attendance/build.py
 
+      - name: Package
+        shell: bash
+        run: |
+          cd canvas-attendance/dist
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            zip -r "Stipt Local - macOS.zip" "Stipt Local.app"
+          else
+            mv "Stipt Local.exe" "Stipt Local - Windows.exe"
+          fi
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: stipt-local-${{ matrix.label }}
-          path: "canvas-attendance/dist/${{ matrix.artifact }}"
+          path: "canvas-attendance/dist/${{ matrix.release_artifact }}"
 
   release:
     needs: build
@@ -56,5 +66,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/stipt-local-windows/Stipt Local.exe
-            dist/stipt-local-macos/Stipt Local
+            dist/stipt-local-windows/Stipt Local - Windows.exe
+            dist/stipt-local-macos/Stipt Local - macOS.zip
