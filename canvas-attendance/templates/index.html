@@ -873,6 +873,16 @@
   </div>
 </div>
 
+<!-- ── Close-warning dialog ──────────────────────────────────────── -->
+<dialog id="close-warning-dialog" aria-label="Bevestig afsluiten">
+  <p>Er is nog een actieve check-in sessie.<br><br>
+     Wil je de app toch afsluiten? Studenten kunnen daarna de quiz niet meer indienen.</p>
+  <div class="cw-actions">
+    <button class="btn btn-ghost" id="cw-cancel">Annuleer</button>
+    <button class="btn btn-danger" id="cw-confirm">Ja, afsluiten</button>
+  </div>
+</dialog>
+
 <script>
 const IS_NATIVE = {{ is_native | tojson }};
 
@@ -1893,15 +1903,6 @@ function escHtml(s) {
 </script>
 
 <!-- ── PiP fallback: floating dialog for non-Document-PiP contexts ── -->
-<dialog id="close-warning-dialog" aria-label="Bevestig afsluiten">
-  <p>Er is nog een actieve check-in sessie.<br><br>
-     Wil je de app toch afsluiten? Studenten kunnen daarna de quiz niet meer indienen.</p>
-  <div class="cw-actions">
-    <button class="btn btn-ghost" id="cw-cancel">Annuleer</button>
-    <button class="btn btn-danger" id="cw-confirm">Ja, afsluiten</button>
-  </div>
-</dialog>
-
 <dialog id="pip-fallback-dialog" aria-label="Zwevend PIN-venster">
   <div class="pip-fb-card">
     <div class="pip-fb-header">
