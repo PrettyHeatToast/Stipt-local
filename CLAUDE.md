@@ -5,8 +5,8 @@ Local web app for teachers to track student attendance via Canvas LMS. A Flask s
 ## Stack
 
 - **Backend:** Python / Flask (`canvas-attendance/app.py`)
-- **Frontend:** Single HTML file, inline CSS + JS (`canvas-attendance/templates/index.html`)
-- **Distribution:** PyInstaller `--onefile` Windows exe (`python canvas-attendance/build.py`)
+- **Frontend:** Two HTML templates — `canvas-attendance/templates/index.html` (main SPA) and `canvas-attendance/templates/pip.html` (PIN display window), both with inline CSS + JS
+- **Distribution:** PyInstaller — Windows `--onefile` `.exe`, macOS `.app` bundle zipped as `.zip` (`python canvas-attendance/build.py`)
 
 ## Running locally
 
@@ -61,4 +61,4 @@ Grade syncs to Canvas on every score change, and absent students receive grade 0
 
 ## Frontend architecture
 
-Single-page app with hash-based routing (`#screen-setup`, `#screen-courses`, `#screen-sections`, `#screen-session`). All state lives in the `state` object. The PIN panel uses the Document Picture-in-Picture API (Chrome 116+).
+Single-page app with hash-based routing (`#screen-setup`, `#screen-courses`, `#screen-sections`, `#screen-session`). All state lives in the `state` object. The PIN panel is a native **pywebview** window rendering `pip.html`, which polls `/api/pip/state` every 500 ms for live PIN and timer updates.
