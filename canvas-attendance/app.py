@@ -538,6 +538,10 @@ class JsApi:
                 _main_window.evaluate_js("pipNativeOpen = false; updatePipBtn();")
         _pip_window.events.closed += _on_closed
 
+    def force_close(self):
+        if _main_window:
+            _main_window.destroy()
+
     def close_pip(self):
         global _pip_window
         if _pip_window:
@@ -573,11 +577,8 @@ if __name__ == "__main__":
 
         def _on_main_closing():
             if session_state.get("quiz_assignment_id"):
-                return _main_window.evaluate_js(
-                    "confirm('Er is nog een actieve check-in sessie.\\n\\n"
-                    "Wil je de app toch afsluiten? "
-                    "Studenten kunnen daarna de quiz niet meer indienen.')"
-                )
+                _main_window.evaluate_js("showCloseWarning()")
+                return False
 
         _main_window.events.closing += _on_main_closing
         webview.start()

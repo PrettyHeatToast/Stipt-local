@@ -605,6 +605,16 @@
     }
     .pip-fb-ring { fill: none; stroke-width: 6; stroke-linecap: round; transition: stroke-dashoffset 1s linear, stroke .5s ease; }
     .pip-fb-track { fill: none; stroke: var(--color-border); stroke-width: 6; }
+
+    /* ── Close-warning modal ── */
+    #close-warning-dialog {
+      border: none; border-radius: var(--radius-lg); padding: var(--space-4);
+      background: var(--color-surface); box-shadow: var(--shadow-lg);
+      max-width: 400px; width: 90%;
+    }
+    #close-warning-dialog::backdrop { background: rgba(0,0,0,.45); }
+    #close-warning-dialog p { margin: 0 0 var(--space-4); color: var(--color-text); line-height: 1.5; }
+    #close-warning-dialog .cw-actions { display: flex; gap: var(--space-3); justify-content: flex-end; }
   </style>
 </head>
 <body>
@@ -1069,6 +1079,19 @@ function syncNativePip() {
 
 // ── PiP fallback (non-Document-PiP contexts, e.g. WebView2) ────────
 const PIP_FB_CIRC = 2 * Math.PI * 36;
+
+// ── Close-warning dialog ────────────────────────────────────────────
+function showCloseWarning() {
+  document.getElementById('close-warning-dialog').showModal();
+}
+document.getElementById('cw-cancel').addEventListener('click', () => {
+  document.getElementById('close-warning-dialog').close();
+});
+document.getElementById('cw-confirm').addEventListener('click', async () => {
+  document.getElementById('close-warning-dialog').close();
+  await endSession();
+  if (window.pywebview) window.pywebview.api.force_close();
+});
 
 function openPipFallback() {
   const dialog = document.getElementById('pip-fallback-dialog');
@@ -1870,6 +1893,15 @@ function escHtml(s) {
 </script>
 
 <!-- ── PiP fallback: floating dialog for non-Document-PiP contexts ── -->
+<dialog id="close-warning-dialog" aria-label="Bevestig afsluiten">
+  <p>Er is nog een actieve check-in sessie.<br><br>
+     Wil je de app toch afsluiten? Studenten kunnen daarna de quiz niet meer indienen.</p>
+  <div class="cw-actions">
+    <button class="btn btn-ghost" id="cw-cancel">Annuleer</button>
+    <button class="btn btn-danger" id="cw-confirm">Ja, afsluiten</button>
+  </div>
+</dialog>
+
 <dialog id="pip-fallback-dialog" aria-label="Zwevend PIN-venster">
   <div class="pip-fb-card">
     <div class="pip-fb-header">
