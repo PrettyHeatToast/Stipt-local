@@ -577,7 +577,10 @@ if __name__ == "__main__":
 
         def _on_main_closing():
             if session_state.get("quiz_assignment_id"):
-                _main_window.evaluate_js("showCloseWarning()")
+                threading.Thread(
+                    target=lambda: _main_window.evaluate_js("showCloseWarning()"),
+                    daemon=True
+                ).start()
                 return False
 
         _main_window.events.closing += _on_main_closing
