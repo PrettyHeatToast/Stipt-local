@@ -29,15 +29,15 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -r canvas-attendance/requirements.txt
+        run: pip install -r src/requirements.txt
 
       - name: Build
-        run: python canvas-attendance/build.py
+        run: python src/build.py
 
       - name: Package
         shell: bash
         run: |
-          cd canvas-attendance/dist
+          cd src/dist
           if [ "${{ runner.os }}" = "macOS" ]; then
             ditto -c -k --keepParent "Stipt Local.app" "Stipt Local - macOS.zip"
           else
@@ -48,7 +48,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: stipt-local-${{ matrix.label }}
-          path: "canvas-attendance/dist/${{ matrix.release_artifact }}"
+          path: "src/dist/${{ matrix.release_artifact }}"
 
   release:
     needs: build

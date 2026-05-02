@@ -15,13 +15,13 @@ if getattr(sys, 'frozen', False):
     _icon_dir = sys._MEIPASS
 else:
     _template_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
-    _icon_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+    _icon_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'brand'))
 
 app = Flask(__name__, template_folder=_template_folder)
 
 @app.route('/favicon.ico')
 def favicon():
-    return send_from_directory(_icon_dir, 'ahs.ico')
+    return send_from_directory(_icon_dir, 'stipt.ico')
 
 _SERVICE = "StiptLocal"
 _flask_error = None

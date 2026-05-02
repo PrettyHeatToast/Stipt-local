@@ -2,16 +2,25 @@
 
 Local web app for teachers to track student attendance via Canvas LMS. A Flask server acts as a proxy — the Canvas API token never reaches the browser.
 
+## Project structure
+
+```
+Stipt-local/
+├── src/         # Application source (Flask app, templates, build scripts)
+├── brand/       # Logos and branding assets (icon, etc.)
+└── .github/     # CI/CD workflows
+```
+
 ## Stack
 
-- **Backend:** Python / Flask (`canvas-attendance/app.py`)
-- **Frontend:** Two HTML templates — `canvas-attendance/templates/index.html` (main SPA) and `canvas-attendance/templates/pip.html` (PIN display window), both with inline CSS + JS
-- **Distribution:** PyInstaller — Windows `--onefile` `.exe`, macOS `.app` bundle zipped as `.zip` (`python canvas-attendance/build.py`)
+- **Backend:** Python / Flask (`src/app.py`)
+- **Frontend:** Two HTML templates — `src/templates/index.html` (main SPA) and `src/templates/pip.html` (PIN display window), both with inline CSS + JS
+- **Distribution:** PyInstaller — Windows `--onefile` `.exe`, macOS `.app` bundle zipped as `.zip` (`python src/build.py`)
 
 ## Running locally
 
 ```bash
-cd canvas-attendance
+cd src
 pip install -r requirements.txt
 python app.py          # opens http://localhost:5050 automatically
 ```
@@ -20,7 +29,7 @@ On first run (no `.env`), the app shows a setup screen to enter Canvas credentia
 
 ## Versioning
 
-Version is stored in `canvas-attendance/version_info.txt` — a PyInstaller Windows resource file. Two places must stay in sync when bumping:
+Version is stored in `src/version_info.txt` — a PyInstaller Windows resource file. Two places must stay in sync when bumping:
 
 ```text
 filevers=(1, 0, 0, 0)        # Windows 4-tuple
@@ -34,7 +43,7 @@ There is no `__version__` in Python code; `version_info.txt` is the single sourc
 
 ### Releasing a new version
 
-1. Edit `canvas-attendance/version_info.txt` — update both tuples and both strings.
+1. Edit `src/version_info.txt` — update both tuples and both strings.
 2. Commit the change.
 3. Push a git tag matching `v*` (e.g. `v1.1`).
 4. GitHub Actions (`.github/workflows/build.yml`) detects the tag, builds Windows + macOS artifacts, and creates a GitHub Release automatically.
