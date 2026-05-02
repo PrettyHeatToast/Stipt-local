@@ -231,7 +231,9 @@ def create_quiz(course_id):
                 "require_student_access_code": True,
                 "student_access_code": pin,
                 "filter_ip_address": True,
-                "ip_address_filter": "193.191.137.192/26"
+                "filters": {
+                    "ips": [["193.191.137.192", "193.191.137.255"]]
+                }
             },
         }
     }
