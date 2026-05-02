@@ -63,6 +63,7 @@ async function poll() {
   try {
     const r     = await fetch('/api/pip/state');
     const state = await r.json();
+    document.documentElement.setAttribute('data-theme', state.theme || 'light');
 
     for (let i = 0; i < 4; i++) {
       document.getElementById(`pip-d${i}`).textContent = (state.pin || '0000')[i] || '0';

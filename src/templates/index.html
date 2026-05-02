@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="nl" data-theme="light">
+<html lang="nl">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -980,6 +980,7 @@ function applyTheme(theme) {
   iconSun.style.display  = theme === 'dark' ? 'none'  : '';
   iconMoon.style.display = theme === 'dark' ? '' : 'none';
   if (pipWindow) pipWindow.document.documentElement.setAttribute('data-theme', theme);
+  syncNativePip();
 }
 
 themeBtn.addEventListener('click', () => {
@@ -990,6 +991,10 @@ themeBtn.addEventListener('click', () => {
 // ── Document Picture-in-Picture ────────────────────────────────────
 let pipWindow = null;
 let pipNativeOpen = false;
+
+const _sysMql = window.matchMedia('(prefers-color-scheme: dark)');
+applyTheme(_sysMql.matches ? 'dark' : 'light');
+_sysMql.addEventListener('change', e => applyTheme(e.matches ? 'dark' : 'light'));
 const PIP_R    = 36;
 const PIP_CIRC = 2 * Math.PI * PIP_R;
 
@@ -1094,6 +1099,7 @@ function syncNativePip() {
       seconds_left: state.countdownSeconds,
       total_seconds: TOTAL,
       session_seconds: state.sessionSeconds,
+      theme: document.documentElement.getAttribute('data-theme'),
     }),
   }).catch(() => {});
 }

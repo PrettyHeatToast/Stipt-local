@@ -47,6 +47,7 @@ _pip_state: dict = {
     "seconds_left": 30,
     "total_seconds": 30,
     "session_seconds": 600,
+    "theme": "light",
 }
 _pip_window = None
 _main_window = None
@@ -530,7 +531,7 @@ class JsApi:
             "http://localhost:5050/pip",
             width=380,
             height=260,
-            resizable=False,
+            resizable=True,
             on_top=True,
         )
         def _on_closed():
