@@ -33,7 +33,21 @@ _BASE_DIR = (
     os.path.dirname(sys.executable) if getattr(sys, 'frozen', False)
     else os.path.dirname(os.path.abspath(__file__))
 )
-_SETTINGS_FILE = os.path.join(_BASE_DIR, 'settings.json')
+
+
+def _get_config_dir() -> str:
+    if sys.platform == 'win32':
+        base = os.environ.get('APPDATA', os.path.expanduser('~'))
+    elif sys.platform == 'darwin':
+        base = os.path.expanduser('~/Library/Application Support')
+    else:
+        base = os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config'))
+    path = os.path.join(base, 'Stipt')
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+_SETTINGS_FILE = os.path.join(_get_config_dir(), 'settings.json')
 _DEFAULT_SETTINGS: dict = {
     'canvas_base_url': '',
     'ical_url': '',
@@ -45,6 +59,11 @@ _DEFAULT_SETTINGS: dict = {
 
 
 def _load_settings() -> dict:
+    # One-time migration: move settings.json from old location next to the exe
+    _old_settings = os.path.join(_BASE_DIR, 'settings.json')
+    if not os.path.exists(_SETTINGS_FILE) and os.path.exists(_old_settings):
+        import shutil
+        shutil.move(_old_settings, _SETTINGS_FILE)
     try:
         with open(_SETTINGS_FILE, 'r', encoding='utf-8') as f:
             return {**_DEFAULT_SETTINGS, **json.load(f)}
