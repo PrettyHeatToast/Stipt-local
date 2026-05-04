@@ -12,6 +12,7 @@ args = [
     "--name", "Stipt Local",
     "--icon=../brand/stipt.ico",
     f"--add-data=templates{os.pathsep}templates",
+    f"--add-data=static{os.pathsep}static",
     f"--add-data=../brand/stipt.ico{os.pathsep}.",
     "--collect-all", "icalendar",
     "--collect-all", "webview",

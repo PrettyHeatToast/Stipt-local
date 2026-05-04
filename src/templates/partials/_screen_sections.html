@@ -1,0 +1,35 @@
+<!-- ── Screen 2: Sections ────────────────────────────────────────── -->
+<div id="screen-sections" class="screen">
+  <div class="page-content">
+    <button class="back-btn" id="back-to-courses" aria-label="Terug naar vakken">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+      Terug
+    </button>
+    <h1 class="page-title">Selecteer secties</h1>
+    <p id="sections-course-name" class="page-subtitle"></p>
+
+    <div id="sections-error" class="banner banner-error" style="display:none">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink:0;margin-top:2px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      <span id="sections-error-msg"></span>
+      <button class="banner-close" onclick="closeBanner('sections-error')" aria-label="Sluit melding">✕</button>
+    </div>
+
+    <div class="sections-toolbar">
+      <span class="sections-label" id="sections-count-label">Secties laden…</span>
+      <button class="btn btn-ghost" id="toggle-all-btn" style="display:none" aria-label="Alles selecteren of deselecteren">Selecteer alles</button>
+    </div>
+
+    <div id="sections-loading" class="card-list">
+      <div class="skeleton skeleton-card"></div>
+      <div class="skeleton skeleton-card"></div>
+    </div>
+    <div id="sections-list" style="display:none"></div>
+
+    <div class="start-btn-wrap">
+      <button class="btn btn-primary" id="start-session-btn" disabled style="width:100%;justify-content:center;padding:var(--space-3)">
+        <span id="start-btn-label">Start sessie →</span>
+        <span id="start-btn-spinner" class="spinner" style="display:none"></span>
+      </button>
+    </div>
+  </div>
+</div>

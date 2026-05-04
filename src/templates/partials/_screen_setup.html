@@ -1,0 +1,23 @@
+<!-- ── Screen 0: Setup ───────────────────────────────────────────── -->
+<div id="screen-setup" class="screen">
+  <div class="setup-card">
+    <div>
+      <h1>Welkom bij Stipt. Local</h1>
+      <p>Verbind de app met je Canvas-omgeving om te beginnen.</p>
+    </div>
+    <div id="setup-error" class="banner banner-error" style="display:none"></div>
+    <div class="field">
+      <label for="setup-url">Canvas URL</label>
+      <input type="url" id="setup-url" placeholder="https://jouwschool.instructure.com" autocomplete="off" />
+    </div>
+    <div class="field">
+      <label for="setup-token">API-token</label>
+      <input type="password" id="setup-token" placeholder="Jouw Canvas access token" autocomplete="off" />
+    </div>
+    <div class="field">
+      <label for="setup-ical">Rooster-URL (iCal) <span style="font-weight:400;color:var(--color-text-tertiary)">(optioneel)</span></label>
+      <input type="url" id="setup-ical" placeholder="https://cloud.timeedit.net/…/ri.ics" autocomplete="off" />
+    </div>
+    <button class="btn btn-primary" id="setup-save-btn">Opslaan en starten</button>
+  </div>
+</div>

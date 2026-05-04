@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import json
 import socket
 import time
 import datetime
@@ -12,12 +13,14 @@ from icalendar import Calendar
 
 if getattr(sys, 'frozen', False):
     _template_folder = os.path.join(sys._MEIPASS, 'templates')
+    _static_folder   = os.path.join(sys._MEIPASS, 'static')
     _icon_dir = sys._MEIPASS
 else:
     _template_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
+    _static_folder   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
     _icon_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'brand'))
 
-app = Flask(__name__, template_folder=_template_folder)
+app = Flask(__name__, template_folder=_template_folder, static_folder=_static_folder)
 
 @app.route('/favicon.ico')
 def favicon():
@@ -26,14 +29,53 @@ def favicon():
 _SERVICE = "StiptLocal"
 _flask_error = None
 
-def _load_credentials():
-    return (
-        keyring.get_password(_SERVICE, "canvas_api_token") or "",
-        (keyring.get_password(_SERVICE, "canvas_base_url") or "").rstrip("/"),
-        keyring.get_password(_SERVICE, "ical_url") or "",
-    )
+_BASE_DIR = (
+    os.path.dirname(sys.executable) if getattr(sys, 'frozen', False)
+    else os.path.dirname(os.path.abspath(__file__))
+)
+_SETTINGS_FILE = os.path.join(_BASE_DIR, 'settings.json')
+_DEFAULT_SETTINGS: dict = {
+    'canvas_base_url': '',
+    'ical_url': '',
+    'hidden_course_ids': None,
+    'session_duration': 600,
+    'pin_duration': 30,
+    'default_score': 1,
+}
 
-CANVAS_API_TOKEN, CANVAS_BASE_URL, ICAL_URL = _load_credentials()
+
+def _load_settings() -> dict:
+    try:
+        with open(_SETTINGS_FILE, 'r', encoding='utf-8') as f:
+            return {**_DEFAULT_SETTINGS, **json.load(f)}
+    except FileNotFoundError:
+        pass
+    except Exception:
+        return dict(_DEFAULT_SETTINGS)
+    # One-time migration: pull canvas_base_url and ical_url from keyring
+    settings = dict(_DEFAULT_SETTINGS)
+    settings['canvas_base_url'] = (keyring.get_password(_SERVICE, "canvas_base_url") or "").rstrip("/")
+    settings['ical_url'] = keyring.get_password(_SERVICE, "ical_url") or ""
+    _save_settings(settings)
+    return settings
+
+
+def _save_settings(updates: dict) -> dict:
+    try:
+        with open(_SETTINGS_FILE, 'r', encoding='utf-8') as f:
+            base = {**_DEFAULT_SETTINGS, **json.load(f)}
+    except Exception:
+        base = dict(_DEFAULT_SETTINGS)
+    base.update(updates)
+    with open(_SETTINGS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(base, f, ensure_ascii=False, indent=2)
+    return base
+
+
+_startup_settings = _load_settings()
+CANVAS_API_TOKEN = keyring.get_password(_SERVICE, "canvas_api_token") or ""
+CANVAS_BASE_URL = _startup_settings['canvas_base_url']
+ICAL_URL = _startup_settings['ical_url']
 
 session_state = {
     "quiz_assignment_id": None,
@@ -51,6 +93,16 @@ _pip_state: dict = {
 }
 _pip_window = None
 _main_window = None
+
+
+def _sync_pip_from_settings(s: dict = None):
+    if s is None:
+        s = _load_settings()
+    _pip_state["seconds_left"] = s["pin_duration"]
+    _pip_state["total_seconds"] = s["pin_duration"]
+    _pip_state["session_seconds"] = s["session_duration"]
+
+_sync_pip_from_settings(_startup_settings)
 
 
 def canvas_get(path, params=None):
@@ -97,16 +149,37 @@ def pip_state_route():
     return jsonify(_pip_state)
 
 
+def _fetch_all_courses() -> list:
+    return canvas_get("/api/v1/courses", {
+        "enrollment_type": "teacher",
+        "enrollment_state": "active",
+        "per_page": 100,
+        "state[]": "available",
+    })
+
+
 @app.route("/api/courses")
 def get_courses():
     try:
-        courses = canvas_get("/api/v1/courses", {
-            "enrollment_type": "teacher",
-            "enrollment_state": "active",
-            "per_page": 100,
-            "state[]": "available",
-        })
-        return jsonify(_filter_current_year(courses))
+        courses = _fetch_all_courses()
+        hidden_ids = _get_hidden_ids(courses)
+        if hidden_ids:
+            id_set = set(hidden_ids)
+            courses = [c for c in courses if c['id'] not in id_set]
+        return jsonify(courses)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/all-courses")
+def get_all_courses():
+    try:
+        courses = _fetch_all_courses()
+        current = _current_academic_year()
+        for c in courses:
+            years = _YEAR_RE.findall(c.get("name") or "")
+            c["is_current_year"] = not years or current in years
+        return jsonify(courses)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -122,16 +195,26 @@ def _current_academic_year() -> str:
         return f"{y}-{str(y + 1)[2:]}"
     return f"{y - 1}-{str(y)[2:]}"
 
-def _filter_current_year(courses: list) -> list:
-    """Keep courses that either have no academic year in their name,
-    or whose year matches the current academic year."""
-    current = _current_academic_year()
-    result = []
-    for course in courses:
-        years = _YEAR_RE.findall(course.get("name") or "")
-        if not years or current in years:
-            result.append(course)
-    return result
+
+_startup_filter_done = False
+_hidden_ids_cache = None
+
+
+def _get_hidden_ids(courses: list) -> list:
+    global _startup_filter_done, _hidden_ids_cache
+    if not _startup_filter_done:
+        saved = set(_startup_settings.get('hidden_course_ids') or [])
+        current = _current_academic_year()
+        auto = {
+            c['id'] for c in courses
+            if (years := _YEAR_RE.findall(c.get("name") or "")) and current not in years
+        }
+        merged = list(saved | auto)
+        if merged != list(saved):
+            _save_settings({'hidden_course_ids': merged})
+        _hidden_ids_cache = merged
+        _startup_filter_done = True
+    return _hidden_ids_cache or []
 
 
 def _ical_matches(summary: str, course_name: str, course_code: str) -> bool:
@@ -172,13 +255,11 @@ def get_ical_suggestions():
     if not summaries:
         return jsonify([])
     try:
-        courses = canvas_get("/api/v1/courses", {
-            "enrollment_type": "teacher",
-            "enrollment_state": "active",
-            "per_page": 100,
-            "state[]": "available",
-        })
-        courses = _filter_current_year(courses)
+        courses = _fetch_all_courses()
+        hidden_ids = _get_hidden_ids(courses)
+        if hidden_ids:
+            id_set = set(hidden_ids)
+            courses = [c for c in courses if c['id'] not in id_set]
     except Exception:
         return jsonify([])
     matched = []
@@ -245,11 +326,6 @@ def create_quiz(course_id):
             )
         return resp
 
-    assign_headers = {
-        "Authorization": f"Bearer {CANVAS_API_TOKEN}",
-        "Content-Type": "application/json",
-    }
-
     try:
         # 1. Create the New Quiz
         resp = checked(1, requests.post(
@@ -302,7 +378,7 @@ def create_quiz(course_id):
                     "only_visible_to_overrides": bool(section_ids),
                 }
             },
-            headers=assign_headers,
+            headers=headers,
         ))
 
         # 5. Create an override for each selected section
@@ -310,7 +386,7 @@ def create_quiz(course_id):
             checked(5, requests.post(
                 f"{CANVAS_BASE_URL}/api/v1/courses/{course_id}/assignments/{assignment_id}/overrides",
                 json={"assignment_override": {"course_section_id": section_id}},
-                headers=assign_headers,
+                headers=headers,
             ))
 
         session_state["quiz_assignment_id"] = assignment_id
@@ -419,11 +495,11 @@ def get_submissions():
 def update_grade():
     data          = request.get_json()
     user_id       = data.get("user_id")
-    score         = data.get("score")        # 0 | 0.5 | 1
+    score         = data.get("score")        # 0 | 1 | 2
     course_id     = data.get("course_id")
     assignment_id = data.get("assignment_id")
 
-    grade = round(score * 2)  # 0→0, 0.5→1, 1→2
+    grade = int(score)
 
     headers = {
         "Authorization": f"Bearer {CANVAS_API_TOKEN}",
@@ -493,14 +569,73 @@ def save_config():
     data = request.get_json()
     token    = data.get("canvas_api_token", "").strip()
     base_url = data.get("canvas_base_url", "").strip().rstrip("/")
-    ical_url = data.get("ical_url", "").strip()           # optional
+    ical_url = data.get("ical_url", "").strip()
     if not token or not base_url:
         return jsonify({"error": "Beide velden zijn verplicht."}), 400
     keyring.set_password(_SERVICE, "canvas_api_token", token)
-    keyring.set_password(_SERVICE, "canvas_base_url", base_url)
-    keyring.set_password(_SERVICE, "ical_url", ical_url)
-    CANVAS_API_TOKEN, CANVAS_BASE_URL, ICAL_URL = _load_credentials()
+    saved = _save_settings({"canvas_base_url": base_url, "ical_url": ical_url})
+    CANVAS_API_TOKEN = token
+    CANVAS_BASE_URL = saved["canvas_base_url"]
+    ICAL_URL = saved["ical_url"]
     return jsonify({"success": True})
+
+
+@app.route("/api/settings", methods=["GET"])
+def get_settings_route():
+    return jsonify(_load_settings())
+
+
+@app.route("/api/settings", methods=["POST"])
+def save_settings_route():
+    global CANVAS_API_TOKEN, CANVAS_BASE_URL, ICAL_URL, _hidden_ids_cache, _startup_filter_done
+    data = request.get_json() or {}
+    updates = {}
+
+    token = data.get("canvas_api_token", "").strip()
+    if token:
+        keyring.set_password(_SERVICE, "canvas_api_token", token)
+        CANVAS_API_TOKEN = token
+
+    if "canvas_base_url" in data:
+        updates["canvas_base_url"] = data["canvas_base_url"].strip().rstrip("/")
+    if "ical_url" in data:
+        updates["ical_url"] = data["ical_url"].strip()
+    if "hidden_course_ids" in data:
+        raw = data["hidden_course_ids"]
+        if raw is None:
+            updates["hidden_course_ids"] = None
+        else:
+            updates["hidden_course_ids"] = [int(i) for i in raw if str(i).lstrip('-').isdigit()]
+    if "session_duration" in data:
+        try:
+            val = int(data["session_duration"])
+            if 60 <= val <= 7200:
+                updates["session_duration"] = val
+        except (ValueError, TypeError):
+            pass
+    if "pin_duration" in data:
+        try:
+            val = int(data["pin_duration"])
+            if 10 <= val <= 300:
+                updates["pin_duration"] = val
+        except (ValueError, TypeError):
+            pass
+    if "default_score" in data:
+        try:
+            val = int(data["default_score"])
+            if val in (0, 1, 2):
+                updates["default_score"] = val
+        except (ValueError, TypeError):
+            pass
+
+    saved = _save_settings(updates)
+    CANVAS_BASE_URL = saved["canvas_base_url"]
+    ICAL_URL = saved["ical_url"]
+    _sync_pip_from_settings(saved)
+    if 'hidden_course_ids' in updates:
+        _hidden_ids_cache = saved.get('hidden_course_ids')
+        _startup_filter_done = True
+    return jsonify({"success": True, "settings": saved})
 
 
 def _run_flask():

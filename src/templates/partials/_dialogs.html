@@ -1,0 +1,39 @@
+<!-- ── Close-warning dialog ──────────────────────────────────────── -->
+<dialog id="close-warning-dialog" aria-label="Bevestig afsluiten">
+  <p>Er is nog een actieve check-in sessie.<br><br>
+     Wil je de app toch afsluiten? Studenten kunnen daarna de quiz niet meer indienen.</p>
+  <div class="cw-actions">
+    <button class="btn btn-ghost" id="cw-cancel">Annuleer</button>
+    <button class="btn btn-danger" id="cw-confirm">Ja, afsluiten</button>
+  </div>
+</dialog>
+
+<!-- ── PiP fallback: floating dialog for non-Document-PiP contexts ── -->
+<dialog id="pip-fallback-dialog" aria-label="Zwevend PIN-venster">
+  <div class="pip-fb-card">
+    <div class="pip-fb-header">
+      <p class="pin-label" style="margin:0">Toegangscode voor studenten</p>
+      <button class="btn btn-ghost btn-pip" onclick="closePipFallback()" aria-label="Sluit zwevend venster">✕</button>
+    </div>
+    <div class="pip-fb-inner">
+      <div class="pin-display" aria-live="polite">
+        <div class="pin-digit" id="pfb-d0">0</div>
+        <div class="pin-digit" id="pfb-d1">0</div>
+        <div class="pin-digit" id="pfb-d2">0</div>
+        <div class="pin-digit" id="pfb-d3">0</div>
+      </div>
+      <div class="countdown-wrap" style="width:80px;height:80px" aria-hidden="true">
+        <svg class="countdown-svg" width="80" height="80" viewBox="0 0 80 80">
+          <circle class="pip-fb-track" cx="40" cy="40" r="36"/>
+          <circle class="pip-fb-ring" id="pfb-ring" cx="40" cy="40" r="36"
+            stroke-dasharray="226.19" stroke-dashoffset="0" stroke="var(--color-success)"/>
+        </svg>
+        <div class="countdown-text" id="pfb-text" style="font-size:var(--text-sm)">00:30</div>
+      </div>
+    </div>
+    <div class="pip-fb-footer">
+      <span class="pin-label" style="margin:0">Check-in sluit over</span>
+      <span class="session-timer-value" id="pfb-session-timer">10:00</span>
+    </div>
+  </div>
+</dialog>

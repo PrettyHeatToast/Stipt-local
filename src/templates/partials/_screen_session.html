@@ -1,0 +1,111 @@
+<!-- ── Screen 3: Session ─────────────────────────────────────────── -->
+<div id="screen-session" class="screen">
+  <div class="page-content-wide">
+
+    <div id="session-ended-banner" class="banner" style="display:none;background:var(--color-success-bg);color:var(--color-success);margin-bottom:var(--space-4)">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink:0"><polyline points="20 6 9 17 4 12"/></svg>
+      <span>Check-in beëindigd. Scores zijn nog aanpasbaar.</span>
+    </div>
+
+    <div id="end-confirm" class="end-confirm">
+      <strong>Check-in beëindigen? Studenten kunnen daarna de quiz niet meer indienen.</strong>
+      <button class="btn btn-danger" id="end-confirm-yes">Ja, beëindig</button>
+      <button class="btn btn-ghost" id="end-confirm-no">Annuleer</button>
+    </div>
+
+    <div class="session-header">
+      <div>
+        <div class="session-title" id="session-course-name"></div>
+        <div class="session-subtitle" id="session-sections-subtitle"></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:var(--space-4)">
+        <div class="session-timer" aria-live="polite" aria-label="Check-in sluit over">
+          <span class="session-timer-label">Check-in sluit over</span>
+          <span class="session-timer-value" id="session-timer-value">10:00</span>
+        </div>
+        <button class="btn btn-ghost" id="end-session-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Beëindig sessie
+        </button>
+      </div>
+    </div>
+
+    <!-- PIN Panel -->
+    <div class="pin-panel" id="pin-panel">
+      <div class="pin-panel-header">
+        <p class="pin-label">Toegangscode voor studenten</p>
+        <button class="btn btn-ghost btn-pip" id="pip-btn" onclick="togglePip()" aria-label="Zwevend venster openen">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="9" width="8" height="6" rx="1" fill="currentColor" stroke="none" opacity=".4"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          <span id="pip-btn-label">Zwevend venster</span>
+        </button>
+      </div>
+      <div class="pin-panel-inner">
+        <div>
+          <div class="pin-display" id="pin-display" aria-live="polite" aria-label="Huidige PIN code">
+            <div class="pin-digit" id="pin-d0">0</div>
+            <div class="pin-digit" id="pin-d1">0</div>
+            <div class="pin-digit" id="pin-d2">0</div>
+            <div class="pin-digit" id="pin-d3">0</div>
+          </div>
+        </div>
+
+        <div class="countdown-wrap" aria-label="Resterende tijd">
+          <svg class="countdown-svg" width="120" height="120" viewBox="0 0 120 120" aria-hidden="true">
+            <circle class="countdown-track" cx="60" cy="60" r="54"/>
+            <circle class="countdown-ring" id="countdown-ring" cx="60" cy="60" r="54"
+              stroke-dasharray="339.29" stroke-dashoffset="0" stroke="var(--color-success)"/>
+          </svg>
+          <div class="countdown-text" id="countdown-text">10:00</div>
+        </div>
+      </div>
+
+      <div id="pin-update-error" class="banner banner-error" style="display:none;margin:0;width:100%">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span id="pin-update-error-msg"></span>
+        <button class="banner-close" onclick="closeBanner('pin-update-error')" aria-label="Sluit melding">✕</button>
+      </div>
+    </div>
+
+    <!-- Students Table -->
+    <div class="table-toolbar">
+      <div class="search-wrap">
+        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="student-search" class="search-input" type="search" placeholder="Zoek student…" aria-label="Zoek studenten">
+      </div>
+    </div>
+
+    <div id="summary-bar" class="summary-bar"></div>
+
+    <div id="students-loading" class="card-list">
+      <div class="skeleton skeleton-card"></div>
+      <div class="skeleton skeleton-card"></div>
+      <div class="skeleton skeleton-card"></div>
+    </div>
+
+    <div id="students-empty" class="empty-state" style="display:none">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+      <p>Geen studenten gevonden in de geselecteerde secties</p>
+    </div>
+
+    <div id="table-wrap" class="table-wrap" style="display:none">
+      <div class="table-scroll">
+        <table class="attendance-table" role="grid">
+          <thead>
+            <tr>
+              <th class="sortable sorted" id="th-name" tabindex="0" role="columnheader" aria-sort="ascending">
+                Student<span class="sort-icon" id="sort-icon-name">↑</span>
+              </th>
+              <th>Sectie</th>
+              <th class="sortable" id="th-status" tabindex="0" role="columnheader" aria-sort="none">
+                Status<span class="sort-icon" id="sort-icon-status"></span>
+              </th>
+              <th>Acties</th>
+            </tr>
+          </thead>
+          <tbody id="students-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>

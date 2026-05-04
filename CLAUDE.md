@@ -63,8 +63,8 @@ There is no `__version__` in Python code; `version_info.txt` is the single sourc
 | Status | Points | `posted_grade` |
 |---|---|---|
 | Afwezig | 0 | 0 |
-| Gedeeltelijk | 1 | 1 |
-| Aanwezig | 2 | 2 |
+| Aanwezig | 1 | 1 |
+| Actief aanwezig | 2 | 2 |
 
 Grade syncs to Canvas on every score change, and absent students receive grade 0 automatically when the session ends.
 
