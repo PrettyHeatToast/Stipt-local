@@ -63,6 +63,12 @@ async function poll() {
   try {
     const r     = await fetch('/api/pip/state');
     const state = await r.json();
+
+    if (state.session_active === false) {
+      if (window.pywebview) window.pywebview.api.close_pip();
+      return;
+    }
+
     document.documentElement.setAttribute('data-theme', state.theme || 'light');
 
     for (let i = 0; i < 4; i++) {

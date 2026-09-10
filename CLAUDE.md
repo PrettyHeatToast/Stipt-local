@@ -57,16 +57,19 @@ There is no `__version__` in Python code; `version_info.txt` is the single sourc
 - `published` is not settable via New Quizzes PATCH — use the classic Assignments PUT instead.
 - Section enrollments use `GET /api/v1/sections/:id/enrollments`, not `courses/:id/enrollments?section_id=`.
 - Ending a session sets `lock_at` to now (not `published: false`) because unpublishing is not permitted in this Canvas setup.
+- Feedback is a submission comment: send `comment[text_comment]` with the grade PUT (the response includes `submission_comments`), remove it with `DELETE /api/v1/courses/:id/assignments/:id/submissions/:user_id/comments/:comment_id`.
 
 ## Score mapping
 
-| Status | Points | `posted_grade` |
-|---|---|---|
-| Afwezig | 0 | 0 |
-| Aanwezig | 1 | 1 |
-| Actief aanwezig | 2 | 2 |
+The quiz is worth 1 point and contains one open (essay) question. Answering it is the check-in. The question is the `quiz_question` setting, or a random entry from `_FUN_QUESTIONS` in `app.py` when that setting is empty.
 
-Grade syncs to Canvas on every score change, and absent students receive grade 0 automatically when the session ends.
+| Status | Points | `posted_grade` | Canvas comment |
+|---|---|---|---|
+| Afwezig (not checked in) | 0 | 0 | — |
+| Aanwezig (checked in) | 1 | 1 | — |
+| Niet behaald (lowered by teacher) | 0 | 0 | `<criterion title>: <Niet behaald feedback>` |
+
+Lowering a student from 1 to 0 requires one of the four rubric criteria in `_CRITERIA` (`app.py`). Only the "Niet behaald" feedback is stored and posted; the "Behaald" column is never sent. Picking another criterion replaces the comment, raising the student back to 1 deletes it. Grade syncs to Canvas on every score change, and absent students receive grade 0 automatically when the session ends.
 
 ## Frontend architecture
 

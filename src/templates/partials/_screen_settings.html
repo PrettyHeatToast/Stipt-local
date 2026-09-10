@@ -53,23 +53,38 @@
           <span class="input-unit">seconden</span>
         </div>
       </div>
+    </div>
+
+    <!-- Quizvraag -->
+    <div class="settings-section">
+      <h2 class="settings-section-title">Quizvraag</h2>
+      <p style="font-size:var(--text-sm);color:var(--color-text-secondary);margin-top:calc(-1 * var(--space-2))">Studenten checken in door deze open vraag te beantwoorden. Laat leeg voor een willekeurige leuke vraag.</p>
       <div class="field">
-        <label>Check-in score</label>
-        <div class="score-selector" role="group" aria-label="Standaard check-in score">
-          <button class="score-option" data-score="0" type="button">Afwezig</button>
-          <button class="score-option" data-score="1" type="button">Aanwezig</button>
-          <button class="score-option" data-score="2" type="button">Actief aanwezig</button>
-        </div>
+        <label for="settings-quiz-question">Vraag <span class="optional-label">(optioneel)</span></label>
+        <input type="text" id="settings-quiz-question" maxlength="500" placeholder="Willekeurige leuke vraag" autocomplete="off" />
       </div>
     </div>
 
     <!-- Cursusfilter -->
-    <div class="settings-section settings-section-last">
+    <div class="settings-section">
       <h2 class="settings-section-title">Cursusfilter</h2>
       <p style="font-size:var(--text-sm);color:var(--color-text-secondary);margin-top:calc(-1 * var(--space-2))">Vink vakken aan die je wil zien op het startscherm. Vakken van het vorig academiejaar worden standaard uitgevinkt.</p>
       <div id="settings-course-list" class="settings-course-list">
         <span class="settings-course-loading">Vakken laden…</span>
       </div>
+    </div>
+
+    <!-- Logboek -->
+    <div class="settings-section settings-section-last">
+      <h2 class="settings-section-title">Logboek</h2>
+      <p style="font-size:var(--text-sm);color:var(--color-text-secondary);margin-top:calc(-1 * var(--space-2))">Leg alle Canvas API-aanroepen vast in een logbestand voor probleemoplossing.</p>
+      <div class="field">
+        <label style="display:flex;align-items:center;gap:var(--space-2);cursor:pointer">
+          <input type="checkbox" id="settings-logging-enabled" />
+          <span>Logboek bijhouden</span>
+        </label>
+      </div>
+      <p id="settings-log-path" style="font-size:var(--text-xs);color:var(--color-text-secondary);margin-top:var(--space-1);word-break:break-all"></p>
     </div>
 
     <div class="settings-actions">

@@ -6,7 +6,12 @@ const state = {
   quizAssignmentId: null,
   currentPin: null,
   students: [],           // raw enrollment objects
-  attendance: {},         // { userId: 0 | 1 | 2 }
+  attendance: {},         // { userId: 0 | 1 }
+  motivations: {},        // { userId: criterionKey } — why a checked-in student got 0
+  feedbackCommentIds: {}, // { userId: Canvas submission comment id } — last synced feedback
+  checkedIn: new Set(),   // userIds whose quiz submission has already been processed
+  gradeQueue: {},         // { userId: Promise } — grade syncs run one after another per student
+  quizQuestion: '',
   sectionMap: {},         // { sectionId: sectionName }
   sortKey: 'name',
   sortAsc: true,
@@ -19,7 +24,6 @@ const state = {
   settings: {
     sessionDuration: 600,
     pinDuration: 30,
-    defaultScore: 1,
     hiddenCourseIds: null,
   },
 };
@@ -550,6 +554,7 @@ async function startSession() {
     });
 
     state.quizAssignmentId = result.quiz_assignment_id;
+    state.quizQuestion = result.question || '';
     state.currentPin = pin;
     navigate('session');
   } catch (e) {
@@ -568,7 +573,8 @@ function initSession() {
     .map(s => s.name).join(', ');
 
   document.getElementById('session-course-name').textContent = state.course.name;
-  document.getElementById('session-sections-subtitle').textContent = sectionNames;
+  document.getElementById('session-sections-subtitle').textContent =
+    state.quizQuestion ? `${sectionNames} · Quizvraag: ${state.quizQuestion}` : sectionNames;
 
   state.sectionMap = {};
   allSections.forEach(s => { state.sectionMap[s.id] = s.name; });
@@ -676,29 +682,50 @@ function updateCountdownUI(s) {
 async function pollAndUpdateSubmissions() {
   if (!state.quizAssignmentId || state.sessionEnded) return;
   const submissions = await apiFetch('/api/session/submissions').catch(() => []);
-  const submittedIds = new Set(
-    (Array.isArray(submissions) ? submissions : [])
-      .filter(s => s.submitted_at || s.workflow_state !== 'unsubmitted')
-      .map(s => s.user_id)
-  );
-  const defaultScore = state.settings.defaultScore;
   const gradePromises = [];
-  submittedIds.forEach(uid => {
-    if ((state.attendance[uid] ?? 0) < defaultScore) {
-      state.attendance[uid] = defaultScore;
-      gradePromises.push(
-        apiFetch('/api/session/grade', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_id: uid, score: defaultScore, course_id: state.course.id, assignment_id: state.quizAssignmentId }),
-        }).catch(() => {})
-      );
-    }
-  });
+  (Array.isArray(submissions) ? submissions : [])
+    .filter(s => s.submitted_at || s.workflow_state !== 'unsubmitted')
+    .forEach(s => {
+      const uid = s.user_id;
+      // Only handle each check-in once, so manual changes are never overridden
+      if (state.checkedIn.has(uid)) return;
+      state.checkedIn.add(uid);
+      if ((state.attendance[uid] ?? 0) === 0 && !state.motivations[uid]) {
+        state.attendance[uid] = 1;
+        gradePromises.push(syncGrade(uid, 1).catch(() => {}));
+      }
+    });
   if (gradePromises.length) {
-    await Promise.allSettled(gradePromises);
     renderTable();
+    await Promise.allSettled(gradePromises);
   }
+}
+
+// Grade syncs for one student are chained, so the comment id returned by one call
+// is known when the next call needs to remove that comment.
+function syncGrade(uid, score, criterion = null) {
+  if (!state.quizAssignmentId) return Promise.resolve(null);
+  const courseId     = state.course.id;
+  const assignmentId = state.quizAssignmentId;
+  const previous = state.gradeQueue[uid] || Promise.resolve();
+  const next = previous.catch(() => {}).then(async () => {
+    const result = await apiFetch('/api/session/grade', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: uid,
+        score,
+        criterion,
+        remove_comment_id: state.feedbackCommentIds[uid] ?? null,
+        course_id: courseId,
+        assignment_id: assignmentId,
+      }),
+    });
+    state.feedbackCommentIds[uid] = result.comment_id ?? null;
+    return result;
+  });
+  state.gradeQueue[uid] = next;
+  return next;
 }
 
 async function loadStudents() {
@@ -715,15 +742,18 @@ async function loadStudents() {
     ]);
     state.students = enrollments;
     state.attendance = {};
+    state.motivations = {};
+    state.feedbackCommentIds = {};
 
     const submittedIds = new Set(
       (Array.isArray(submissions) ? submissions : [])
         .filter(s => s.submitted_at || (s.workflow_state !== 'unsubmitted'))
         .map(s => s.user_id)
     );
+    state.checkedIn = new Set(submittedIds);
 
     enrollments.forEach(e => {
-      state.attendance[e.user_id] = submittedIds.has(e.user_id) ? state.settings.defaultScore : 0;
+      state.attendance[e.user_id] = submittedIds.has(e.user_id) ? 1 : 0;
     });
     document.getElementById('students-loading').style.display = 'none';
 
@@ -747,7 +777,7 @@ function sortedFilteredStudents() {
   list.sort((a, b) => {
     let cmp;
     if (state.sortKey === 'status') {
-      cmp = (state.attendance[a.user_id] ?? 0) - (state.attendance[b.user_id] ?? 0);
+      cmp = scoreInfo(a.user_id).rank - scoreInfo(b.user_id).rank;
     } else {
       const na = (a.user && a.user.sortable_name) || a.user_name || '';
       const nb = (b.user && b.user.sortable_name) || b.user_name || '';
@@ -776,22 +806,24 @@ function renderTable() {
 
   tbody.innerHTML = list.map(e => {
     const uid   = e.user_id;
-    const name  = (e.user && e.user.sortable_name) || e.user_name || `Student ${uid}`;
+    const name  = studentName(e);
     const secId = e.course_section_id;
     const secName = state.sectionMap[secId] || `Sectie ${secId}`;
-    const score = state.attendance[uid] ?? 1;
-    const { label, cls } = scoreInfo(score);
+    const score = state.attendance[uid] ?? 0;
+    const motivated = !!state.motivations[uid];
+    const { label, cls } = scoreInfo(uid);
+    const lowerLabel = motivated ? `Wijzig motivatie voor ${name}` : `Verlaag aanwezigheid voor ${name}`;
 
     return `<tr data-uid="${uid}">
       <td>${escHtml(name)}</td>
       <td>${escHtml(secName)}</td>
-      <td><span class="status-badge ${cls}">${label}</span></td>
+      <td><span class="status-badge ${cls}">${escHtml(label)}</span></td>
       <td>
         <div class="actions-cell">
           <button class="btn-icon" aria-label="Verhoog aanwezigheid voor ${escHtml(name)}"
-            data-uid="${uid}" data-delta="1" ${score >= 2 ? 'disabled' : ''}>+</button>
-          <button class="btn-icon" aria-label="Verlaag aanwezigheid voor ${escHtml(name)}"
-            data-uid="${uid}" data-delta="-1" ${score <= 0 ? 'disabled' : ''}>−</button>
+            data-uid="${uid}" data-action="raise" ${score >= 1 ? 'disabled' : ''}>+</button>
+          <button class="btn-icon" aria-label="${escHtml(lowerLabel)}" title="${motivated ? 'Wijzig motivatie' : 'Verlaag'}"
+            data-uid="${uid}" data-action="lower" ${score === 0 && !motivated ? 'disabled' : ''}>−</button>
         </div>
       </td>
     </tr>`;
@@ -800,47 +832,70 @@ function renderTable() {
   updateSummary();
 }
 
-function scoreInfo(score) {
-  if (score === 2) return { label: 'Actief aanwezig', cls: 'badge-present' };
-  if (score === 1) return { label: 'Aanwezig',        cls: 'badge-partial' };
-  return                   { label: 'Afwezig',         cls: 'badge-absent' };
+function studentName(e) {
+  return (e.user && e.user.sortable_name) || e.user_name || `Student ${e.user_id}`;
 }
 
-function changeScore(uid, delta) {
-  const steps = [0, 1, 2];
-  const cur = state.attendance[uid] ?? 0;
-  const idx = steps.indexOf(cur);
-  const newIdx = Math.max(0, Math.min(2, idx + delta));
-  const newScore = steps[newIdx];
-  state.attendance[uid] = newScore;
+// rank: sort order for the status column (afwezig < niet behaald < aanwezig)
+function scoreInfo(uid) {
+  if ((state.attendance[uid] ?? 0) === 1) return { label: 'Aanwezig', cls: 'badge-present', rank: 2 };
+  const criterion = CRITERIA.find(c => c.key === state.motivations[uid]);
+  if (criterion) return { label: `Niet behaald · ${criterion.title}`, cls: 'badge-partial', rank: 1 };
+  return { label: 'Afwezig', cls: 'badge-absent', rank: 0 };
+}
+
+function raiseToPresent(uid) {
+  state.attendance[uid] = 1;
+  delete state.motivations[uid];
   renderTable();
-
-  if (state.quizAssignmentId) {
-    apiFetch('/api/session/grade', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user_id: uid,
-        score: newScore,
-        course_id: state.course.id,
-        assignment_id: state.quizAssignmentId,
-      }),
-    }).catch(e => showBanner('pin-update-error', `Grade update mislukt: ${e.message}`));
-  }
+  syncGrade(uid, 1).catch(e => showBanner('pin-update-error', `Grade update mislukt: ${e.message}`));
 }
+
+function applyMotivation(uid, criterion) {
+  if (state.attendance[uid] === 0 && state.motivations[uid] === criterion) return;
+  state.attendance[uid] = 0;
+  state.motivations[uid] = criterion;
+  renderTable();
+  syncGrade(uid, 0, criterion).catch(e => showBanner('pin-update-error', `Feedback opslaan mislukt: ${e.message}`));
+}
+
+// ── Motivation dialog ──────────────────────────────────────────────
+let motivationUid = null;
+
+function openMotivationDialog(uid) {
+  motivationUid = uid;
+  const student = state.students.find(e => e.user_id === uid);
+  document.getElementById('motivation-student').textContent = student ? studentName(student) : '';
+  const current = state.motivations[uid];
+  document.getElementById('motivation-options').innerHTML = CRITERIA.map((c, i) => `
+    <button type="button" class="motivation-option${c.key === current ? ' active' : ''}" data-criterion="${escHtml(c.key)}">
+      <span class="motivation-option-title">${i + 1}. ${escHtml(c.title)}</span>
+      <span class="motivation-option-feedback">${escHtml(c.feedback)}</span>
+    </button>
+  `).join('');
+  document.getElementById('motivation-dialog').showModal();
+}
+
+document.getElementById('motivation-options').addEventListener('click', e => {
+  const btn = e.target.closest('[data-criterion]');
+  if (!btn || motivationUid === null) return;
+  const uid = motivationUid;
+  motivationUid = null;
+  document.getElementById('motivation-dialog').close();
+  applyMotivation(uid, btn.dataset.criterion);
+});
+document.getElementById('motivation-cancel').addEventListener('click', () => {
+  motivationUid = null;
+  document.getElementById('motivation-dialog').close();
+});
 
 function updateSummary() {
-  let present = 0, partial = 0, absent = 0;
-  state.students.forEach(e => {
-    const s = state.attendance[e.user_id] ?? 1;
-    if (s === 2)   present++;
-    else if (s === 1) partial++;
-    else           absent++;
-  });
+  const counts = [0, 0, 0];   // indexed by scoreInfo rank
+  state.students.forEach(e => { counts[scoreInfo(e.user_id).rank]++; });
   document.getElementById('summary-bar').innerHTML = `
-    <span class="summary-chip chip-present">✓ ${present} actief aanwezig</span>
-    <span class="summary-chip chip-partial">◑ ${partial} aanwezig</span>
-    <span class="summary-chip chip-absent">✕ ${absent} afwezig</span>
+    <span class="summary-chip chip-present">✓ ${counts[2]} aanwezig</span>
+    <span class="summary-chip chip-partial">◑ ${counts[1]} niet behaald</span>
+    <span class="summary-chip chip-absent">✕ ${counts[0]} afwezig</span>
   `;
 }
 
@@ -880,9 +935,11 @@ document.getElementById('th-status').addEventListener('keydown', e => {
 
 // ── Score buttons (delegated) ──────────────────────────────────────
 document.getElementById('students-tbody').addEventListener('click', e => {
-  const btn = e.target.closest('[data-uid]');
+  const btn = e.target.closest('button[data-action]');
   if (!btn) return;
-  changeScore(parseInt(btn.dataset.uid, 10), parseInt(btn.dataset.delta, 10));
+  const uid = parseInt(btn.dataset.uid, 10);
+  if (btn.dataset.action === 'raise') raiseToPresent(uid);
+  else openMotivationDialog(uid);
 });
 
 // ── Filter ─────────────────────────────────────────────────────────
@@ -908,6 +965,10 @@ async function endSession() {
   if (state.sessionInterval)   { clearInterval(state.sessionInterval);   state.sessionInterval = null; }
   document.getElementById('end-confirm').classList.remove('show');
   if (pipWindow) { pipWindow.close(); pipWindow = null; }
+  if (pipNativeOpen && window.pywebview) {
+    try { await window.pywebview.api.close_pip(); } catch (_) {}
+    pipNativeOpen = false;
+  }
   closePipFallback();
   updatePipBtn();
 
@@ -917,15 +978,11 @@ async function endSession() {
   // Final poll — capture any last-second submissions before flushing absents
   await pollAndUpdateSubmissions();
 
-  // Submit grade 0 for all still-absent students
+  // Submit grade 0 for all still-absent students (zeros with a motivation are already synced)
   await Promise.allSettled(
     state.students
-      .filter(e => (state.attendance[e.user_id] ?? 0) === 0)
-      .map(e => apiFetch('/api/session/grade', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: e.user_id, score: 0, course_id: state.course.id, assignment_id: state.quizAssignmentId }),
-      }))
+      .filter(e => (state.attendance[e.user_id] ?? 0) === 0 && !state.motivations[e.user_id])
+      .map(e => syncGrade(e.user_id, 0))
   );
 
   state.sessionEnded = true;
@@ -946,8 +1003,13 @@ function showSessionEndedUI() {
 function leaveSession() {
   state.quizAssignmentId = null;
   state.currentPin = null;
+  state.quizQuestion = '';
   state.students = [];
   state.attendance = {};
+  state.motivations = {};
+  state.feedbackCommentIds = {};
+  state.checkedIn = new Set();
+  state.gradeQueue = {};
   state.sessionEnded = false;
   navigate('courses');
 }
@@ -991,7 +1053,6 @@ function escHtml(s) {
 // ── Settings ────────────────────────────────────────────────────────
 let _settingsAllCourses = [];
 let _settingsHiddenIds  = new Set();
-let _settingsScoreLocal = 2;
 
 async function loadSettingsScreen() {
   document.getElementById('settings-course-list').innerHTML =
@@ -1005,7 +1066,9 @@ async function loadSettingsScreen() {
     document.getElementById('settings-ical-url').value     = s.ical_url || '';
     document.getElementById('settings-duration').value     = Math.round((s.session_duration || 600) / 60);
     document.getElementById('settings-pin-duration').value = s.pin_duration || 30;
-    _settingsScoreLocal = s.default_score ?? 1;
+    document.getElementById('settings-quiz-question').value = s.quiz_question || '';
+    document.getElementById('settings-logging-enabled').checked = !!s.logging_enabled;
+    document.getElementById('settings-log-path').textContent = s.log_path || '';
 
     _settingsAllCourses = Array.isArray(courses) ? courses : [];
     const configuredIds = s.hidden_course_ids;
@@ -1020,11 +1083,9 @@ async function loadSettingsScreen() {
   } catch (_) {
     _settingsAllCourses = [];
     _settingsHiddenIds  = new Set(state.settings.hiddenCourseIds || []);
-    _settingsScoreLocal = state.settings.defaultScore;
   }
   document.getElementById('settings-api-token').value = '';
   renderCoursesFilter();
-  setActiveScoreOption(_settingsScoreLocal);
 }
 
 function renderCoursesFilter() {
@@ -1042,13 +1103,6 @@ function renderCoursesFilter() {
       `<span>${escHtml(course.name || course.course_code || String(course.id))}</span>` +
       `</label>`;
   }).join('');
-}
-
-function setActiveScoreOption(score) {
-  _settingsScoreLocal = score;
-  document.querySelectorAll('.score-option').forEach(btn => {
-    btn.classList.toggle('active', parseInt(btn.dataset.score, 10) === score);
-  });
 }
 
 async function saveSettings() {
@@ -1073,8 +1127,9 @@ async function saveSettings() {
     ical_url:          icalUrl,
     session_duration:  durationMin * 60,
     pin_duration:      pinDuration,
-    default_score:     _settingsScoreLocal,
+    quiz_question:     document.getElementById('settings-quiz-question').value.trim(),
     hidden_course_ids: hiddenIds,
+    logging_enabled:   document.getElementById('settings-logging-enabled').checked,
   };
   if (token) payload.canvas_api_token = token;
 
@@ -1087,8 +1142,8 @@ async function saveSettings() {
     const s = result.settings;
     state.settings.sessionDuration = s.session_duration;
     state.settings.pinDuration     = s.pin_duration;
-    state.settings.defaultScore    = s.default_score;
     state.settings.hiddenCourseIds = s.hidden_course_ids;
+    state.settings.loggingEnabled  = s.logging_enabled;
     document.getElementById('settings-dialog').close();
     if (document.getElementById('screen-courses').classList.contains('active')) loadCourses();
   } catch (e) {
@@ -1102,9 +1157,6 @@ async function saveSettings() {
 document.getElementById('settings-close-btn').addEventListener('click', () => document.getElementById('settings-dialog').close());
 document.getElementById('settings-cancel-btn').addEventListener('click', () => document.getElementById('settings-dialog').close());
 document.getElementById('settings-save-btn').addEventListener('click', saveSettings);
-document.querySelectorAll('.score-option').forEach(btn => {
-  btn.addEventListener('click', () => setActiveScoreOption(parseInt(btn.dataset.score, 10)));
-});
 document.getElementById('settings-btn').addEventListener('click', openSettings);
 
 // ── Init ───────────────────────────────────────────────────────────
@@ -1118,7 +1170,6 @@ document.getElementById('settings-btn').addEventListener('click', openSettings);
 
   state.settings.sessionDuration = sett.session_duration ?? 600;
   state.settings.pinDuration     = sett.pin_duration     ?? 30;
-  state.settings.defaultScore    = sett.default_score    ?? 1;
   state.settings.hiddenCourseIds = sett.hidden_course_ids ?? null;
   state.sessionSeconds           = state.settings.sessionDuration;
   state.countdownSeconds         = state.settings.pinDuration;

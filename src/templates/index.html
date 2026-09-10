@@ -19,7 +19,10 @@
 {% include "partials/_screen_settings.html" %}
 {% include "partials/_dialogs.html" %}
 
-<script>const IS_NATIVE = {{ is_native | tojson }};</script>
+<script>
+  const IS_NATIVE = {{ is_native | tojson }};
+  const CRITERIA  = {{ criteria | tojson }};
+</script>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

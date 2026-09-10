@@ -2,10 +2,14 @@ import os
 import re
 import sys
 import json
+import html
+import random
 import socket
 import time
 import datetime
 import threading
+import logging
+from logging.handlers import RotatingFileHandler
 from flask import Flask, jsonify, request, render_template, send_from_directory
 import requests
 import keyring
@@ -54,8 +58,47 @@ _DEFAULT_SETTINGS: dict = {
     'hidden_course_ids': None,
     'session_duration': 600,
     'pin_duration': 30,
-    'default_score': 1,
+    'quiz_question': '',
+    'logging_enabled': False,
 }
+
+# Rubric criteria for lowering a student from 1 to 0. Only the "Niet behaald"
+# feedback is kept here; it is posted as a submission comment in Canvas.
+_CRITERIA: list = [
+    {'key': 'startklaar', 'title': 'Startklaar en betrokken',
+     'feedback': 'Je komt te laat of verlaat de les vroeger of je hebt je materiaal (laptop, boeken, pen en papier,...) niet bij.'},
+    {'key': 'focus', 'title': 'Focus en taken aanpakken',
+     'feedback': 'Je bent afgeleid (bijv. telefoon, praten). Je stoort anderen.'},
+    {'key': 'verbinding', 'title': 'Verbinding en samenwerking',
+     'feedback': 'Je bent onbeleefd. Je werkt niet mee met de groep of negeert anderen.'},
+    {'key': 'initiatief', 'title': 'Initiatief en vragen stellen',
+     'feedback': 'Je geeft snel op als het moeilijk is. Je vraagt niet om hulp.'},
+]
+_CRITERIA_BY_KEY = {c['key']: c for c in _CRITERIA}
+
+# Check-in question used when no custom quiz_question is configured.
+_FUN_QUESTIONS: list = [
+    "Welk dier zou je willen zijn en waarom?",
+    "Wat is het lekkerste dat je deze week hebt gegeten?",
+    "Welke superkracht zou je kiezen?",
+    "Welk liedje zit er vandaag in je hoofd?",
+    "Als je morgen vrij had, wat zou je dan doen?",
+    "Wat is je favoriete snack tijdens het studeren?",
+    "Welke film of serie raad je iedereen aan?",
+    "Naar welk land zou je meteen op reis willen?",
+    "Wat is een talent dat weinig mensen van je kennen?",
+    "Koffie, thee of iets anders? Waarom?",
+    "Wat was het leukste moment van je afgelopen weekend?",
+    "Over welk onderwerp zou je zelf les willen geven?",
+    "Welk gerecht kan je het best klaarmaken?",
+    "Met welke bekende persoon zou je graag eens lunchen?",
+    "Wat is de handigste app op je telefoon?",
+    "Ben je een ochtendmens of een avondmens?",
+    "Wat zou je doen met een extra uur per dag?",
+    "Welk spel (bord- of videogame) speel je het liefst?",
+    "Wat is het mooiste plekje in je stad of gemeente?",
+    "Waar kijk je deze week het meest naar uit?",
+]
 
 
 def _load_settings() -> dict:
@@ -96,6 +139,35 @@ CANVAS_API_TOKEN = keyring.get_password(_SERVICE, "canvas_api_token") or ""
 CANVAS_BASE_URL = _startup_settings['canvas_base_url']
 ICAL_URL = _startup_settings['ical_url']
 
+_LOG_FILE = os.path.join(_get_config_dir(), 'stipt.log')
+_logger: logging.Logger | None = None
+
+
+def _setup_logger(enabled: bool) -> None:
+    global _logger
+    lg = logging.getLogger('stipt')
+    for h in lg.handlers[:]:
+        h.close()
+    lg.handlers.clear()
+    if not enabled:
+        _logger = None
+        return
+    handler = RotatingFileHandler(_LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding='utf-8')
+    handler.setFormatter(logging.Formatter('%(asctime)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+    lg.setLevel(logging.DEBUG)
+    lg.addHandler(handler)
+    _logger = lg
+
+
+_setup_logger(bool(_startup_settings.get('logging_enabled', False)))
+
+
+def _log_api(method: str, url: str, reason: str, status: int | None = None) -> None:
+    if _logger is None:
+        return
+    status_part = f" | HTTP {status}" if status is not None else ""
+    _logger.info(f"{method:<6} | {url}{status_part} | {reason}")
+
 session_state = {
     "quiz_assignment_id": None,
     "quiz_id": None,       # New Quizzes UUID (needed for items API)
@@ -109,6 +181,7 @@ _pip_state: dict = {
     "total_seconds": 30,
     "session_seconds": 600,
     "theme": "light",
+    "session_active": True,
 }
 _pip_window = None
 _main_window = None
@@ -124,7 +197,7 @@ def _sync_pip_from_settings(s: dict = None):
 _sync_pip_from_settings(_startup_settings)
 
 
-def canvas_get(path, params=None):
+def canvas_get(path, params=None, reason: str = ''):
     headers = {"Authorization": f"Bearer {CANVAS_API_TOKEN}"}
     url = f"{CANVAS_BASE_URL}{path}"
     if not CANVAS_BASE_URL:
@@ -132,6 +205,7 @@ def canvas_get(path, params=None):
     results = []
     while url:
         resp = requests.get(url, headers=headers, params=params)
+        _log_api('GET', resp.url, reason, resp.status_code)
         resp.raise_for_status()
         data = resp.json()
         if isinstance(data, list):
@@ -151,7 +225,7 @@ def canvas_get(path, params=None):
 @app.route("/")
 def index():
     is_native = bool(getattr(sys, "frozen", False) or os.environ.get("STIPT_WEBVIEW"))
-    return render_template("index.html", is_native=is_native)
+    return render_template("index.html", is_native=is_native, criteria=_CRITERIA)
 
 
 @app.route("/pip")
@@ -174,7 +248,7 @@ def _fetch_all_courses() -> list:
         "enrollment_state": "active",
         "per_page": 100,
         "state[]": "available",
-    })
+    }, reason="Cursussen ophalen")
 
 
 @app.route("/api/courses")
@@ -258,6 +332,7 @@ def get_ical_suggestions():
     today = datetime.date.today()
     try:
         resp = requests.get(ICAL_URL, timeout=5)
+        _log_api('GET', ICAL_URL, "iCal rooster ophalen", resp.status_code)
         resp.raise_for_status()
         cal = Calendar.from_ical(resp.content)
         events_today = [
@@ -297,7 +372,7 @@ def get_ical_suggestions():
 @app.route("/api/courses/<int:course_id>/sections")
 def get_sections(course_id):
     try:
-        sections = canvas_get(f"/api/v1/courses/{course_id}/sections", {"per_page": 100})
+        sections = canvas_get(f"/api/v1/courses/{course_id}/sections", {"per_page": 100}, reason=f"Secties ophalen voor cursus {course_id}")
         return jsonify(sections)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -306,7 +381,7 @@ def get_sections(course_id):
 @app.route("/api/courses/<int:course_id>/assignment_groups")
 def get_assignment_groups(course_id):
     try:
-        groups = canvas_get(f"/api/v1/courses/{course_id}/assignment_groups")
+        groups = canvas_get(f"/api/v1/courses/{course_id}/assignment_groups", reason=f"Opdrachtengroepen ophalen voor cursus {course_id}")
         return jsonify(groups)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -351,36 +426,46 @@ def create_quiz(course_id):
             f"{CANVAS_BASE_URL}/api/quiz/v1/courses/{course_id}/quizzes",
             json=payload, headers=headers,
         ))
+        _log_api('POST', f"{CANVAS_BASE_URL}/api/quiz/v1/courses/{course_id}/quizzes", f"Aanwezigheidsquiz aanmaken voor cursus {course_id}", resp.status_code)
         quiz_data = resp.json()
         quiz_id = quiz_data.get("id")
 
-        # 2. Add a confirmation question so students can submit
-        checked(2, requests.post(
+        # 2. Add the open check-in question; answering it is the check-in
+        question = (_load_settings().get("quiz_question") or "").strip() or random.choice(_FUN_QUESTIONS)
+        r2 = checked(2, requests.post(
             f"{CANVAS_BASE_URL}/api/quiz/v1/courses/{course_id}/quizzes/{quiz_id}/items",
             json={
                 "item": {
                     "entry_type": "Item",
-                    "points_possible": 2,
+                    "points_possible": 1,
                     "entry": {
-                        "title": "Aanwezigheid bevestigen",
-                        "item_body": "<p>Bevestig je aanwezigheid bij deze les.</p>",
-                        "interaction_type_slug": "true-false",
+                        "title": "Check-in vraag",
+                        "item_body": f"<p>{html.escape(question)}</p>",
+                        "interaction_type_slug": "essay",
                         "interaction_data": {
-                            "true_choice": "Aanwezig",
-                            "false_choice": "Afwezig",
+                            "rce": True,
+                            "essay": None,
+                            "word_count": False,
+                            "spell_check": True,
+                            "word_limit_enabled": False,
+                            "word_limit_min": None,
+                            "word_limit_max": None,
+                            "file_upload": False,
                         },
-                        "scoring_data": {"value": True},
-                        "scoring_algorithm": "Equivalence",
+                        "scoring_data": {"value": ""},
+                        "scoring_algorithm": "None",
                     },
                 }
             },
             headers=headers,
         ))
+        _log_api('POST', f"{CANVAS_BASE_URL}/api/quiz/v1/courses/{course_id}/quizzes/{quiz_id}/items", f"Check-in vraag toevoegen aan quiz {quiz_id}", r2.status_code)
 
         # 3. Find the Canvas assignment created for this quiz (not in quiz response)
         assignments = canvas_get(
             f"/api/v1/courses/{course_id}/assignments",
             {"search_term": title, "per_page": 10},
+            reason=f"Opdracht-ID opzoeken voor quiz '{title}'",
         )
         matching = [a for a in assignments if a.get("name") == title]
         assignment_id = max(matching, key=lambda a: a["id"])["id"] if matching else None
@@ -388,31 +473,34 @@ def create_quiz(course_id):
             raise ValueError(f"Kon het Canvas-assignment voor '{title}' niet vinden na aanmaken quiz.")
 
         # 4. Publish and limit visibility to selected sections only
-        checked(4, requests.put(
+        r4 = checked(4, requests.put(
             f"{CANVAS_BASE_URL}/api/v1/courses/{course_id}/assignments/{assignment_id}",
             json={
                 "assignment": {
                     "published": True,
-                    "points_possible": 2,
+                    "points_possible": 1,
                     "only_visible_to_overrides": bool(section_ids),
                 }
             },
             headers=headers,
         ))
+        _log_api('PUT', f"{CANVAS_BASE_URL}/api/v1/courses/{course_id}/assignments/{assignment_id}", f"Quiz-opdracht {assignment_id} publiceren", r4.status_code)
 
         # 5. Create an override for each selected section
         for section_id in section_ids:
-            checked(5, requests.post(
+            r5 = checked(5, requests.post(
                 f"{CANVAS_BASE_URL}/api/v1/courses/{course_id}/assignments/{assignment_id}/overrides",
                 json={"assignment_override": {"course_section_id": section_id}},
                 headers=headers,
             ))
+            _log_api('POST', f"{CANVAS_BASE_URL}/api/v1/courses/{course_id}/assignments/{assignment_id}/overrides", f"Sectiebeperking instellen voor opdracht {assignment_id} (sectie {section_id})", r5.status_code)
 
         session_state["quiz_assignment_id"] = assignment_id
         session_state["quiz_id"] = quiz_id
         session_state["course_id"] = course_id
         session_state["current_pin"] = pin
-        return jsonify({"quiz_assignment_id": assignment_id, "quiz": quiz_data})
+        _pip_state["session_active"] = True
+        return jsonify({"quiz_assignment_id": assignment_id, "quiz": quiz_data, "question": question})
     except requests.HTTPError as e:
         return jsonify({"error": f"Canvas API fout: {e}"}), e.response.status_code
     except Exception as e:
@@ -443,6 +531,7 @@ def update_password(quiz_assignment_id):
             json=payload,
             headers=headers,
         )
+        _log_api('PATCH', f"{CANVAS_BASE_URL}/api/quiz/v1/courses/{course_id}/quizzes/{quiz_id}", f"PIN roteren voor quiz {quiz_id}", resp.status_code)
         resp.raise_for_status()
         session_state["current_pin"] = pin
         return jsonify({"success": True})
@@ -470,6 +559,7 @@ def end_session():
             f"{CANVAS_BASE_URL}/api/v1/courses/{course_id}/assignments/{assignment_id}",
             headers={"Authorization": f"Bearer {CANVAS_API_TOKEN}"},
         )
+        _log_api('GET', f"{CANVAS_BASE_URL}/api/v1/courses/{course_id}/assignments/{assignment_id}", "Opdracht ophalen om sessie te beëindigen", assign_resp.status_code)
         assign_resp.raise_for_status()
         current_title = assign_resp.json().get("name", "Aanwezigheid")
 
@@ -478,15 +568,18 @@ def end_session():
         new_title = f"{current_title} (beëindigd {end_time})"
         lock_at = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        requests.put(
+        put_resp = requests.put(
             f"{CANVAS_BASE_URL}/api/v1/courses/{course_id}/assignments/{assignment_id}",
             json={"assignment": {"name": new_title, "lock_at": lock_at}},
             headers=headers,
-        ).raise_for_status()
+        )
+        _log_api('PUT', f"{CANVAS_BASE_URL}/api/v1/courses/{course_id}/assignments/{assignment_id}", "Opdracht vergrendelen om sessie te beëindigen", put_resp.status_code)
+        put_resp.raise_for_status()
 
         # Clear server-side session
         session_state.update({"quiz_assignment_id": None, "quiz_id": None,
                                "course_id": None, "current_pin": None})
+        _pip_state["session_active"] = False
         return jsonify({"success": True})
     except requests.HTTPError as e:
         return jsonify({"error": f"Canvas API fout: {e.response.text}"}), e.response.status_code
@@ -504,6 +597,7 @@ def get_submissions():
         subs = canvas_get(
             f"/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions",
             {"per_page": 100},
+            reason=f"Inzendingen ophalen voor opdracht {assignment_id}",
         )
         return jsonify(subs)
     except Exception as e:
@@ -514,24 +608,63 @@ def get_submissions():
 def update_grade():
     data          = request.get_json()
     user_id       = data.get("user_id")
-    score         = data.get("score")        # 0 | 1 | 2
+    score         = data.get("score")        # 0 | 1
     course_id     = data.get("course_id")
     assignment_id = data.get("assignment_id")
+    criterion_key = data.get("criterion")    # _CRITERIA key, only with score 0
 
-    grade = int(score)
+    try:
+        grade = int(score)
+    except (ValueError, TypeError):
+        grade = None
+    if grade not in (0, 1):
+        return jsonify({"error": "Ongeldige score."}), 400
+
+    criterion = None
+    if criterion_key:
+        criterion = _CRITERIA_BY_KEY.get(criterion_key)
+        if not criterion or grade != 0:
+            return jsonify({"error": "Ongeldig criterium."}), 400
+
+    try:
+        remove_comment_id = int(data["remove_comment_id"]) if data.get("remove_comment_id") else None
+    except (ValueError, TypeError):
+        remove_comment_id = None
 
     headers = {
         "Authorization": f"Bearer {CANVAS_API_TOKEN}",
         "Content-Type": "application/json",
     }
+    submission_url = f"{CANVAS_BASE_URL}/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions/{user_id}"
+    payload = {"submission": {"posted_grade": str(grade)}}
+    comment_text = None
+    if criterion:
+        comment_text = f"{criterion['title']}: {criterion['feedback']}"
+        payload["comment"] = {"text_comment": comment_text}
     try:
-        resp = requests.put(
-            f"{CANVAS_BASE_URL}/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions/{user_id}",
-            json={"submission": {"posted_grade": str(grade)}},
-            headers=headers,
-        )
+        resp = requests.put(submission_url, json=payload, headers=headers)
+        reason = f"Aanwezigheidsscore synchroniseren voor student {user_id} (score: {grade})"
+        if criterion:
+            reason += f" met feedback '{criterion['title']}'"
+        _log_api('PUT', submission_url, reason, resp.status_code)
         resp.raise_for_status()
-        return jsonify({"success": True})
+
+        comment_id = None
+        if comment_text:
+            comments = resp.json().get("submission_comments") or []
+            ids = [c["id"] for c in comments if c.get("comment") == comment_text]
+            comment_id = max(ids) if ids else None
+
+        # Remove the previously posted feedback only after the new grade is in (best-effort)
+        if remove_comment_id and remove_comment_id != comment_id:
+            delete_url = f"{submission_url}/comments/{remove_comment_id}"
+            try:
+                del_resp = requests.delete(delete_url, headers=headers)
+                _log_api('DELETE', delete_url, f"Vorige feedback verwijderen voor student {user_id}", del_resp.status_code)
+            except requests.RequestException as e:
+                _log_api('DELETE', delete_url, f"Vorige feedback verwijderen mislukt: {e}")
+
+        return jsonify({"success": True, "comment_id": comment_id})
     except requests.HTTPError as e:
         return jsonify({"error": f"Canvas API fout: {e.response.text}"}), e.response.status_code
     except Exception as e:
@@ -550,6 +683,7 @@ def get_enrollments(course_id):
                 students = canvas_get(
                     f"/api/v1/sections/{section_id}/enrollments",
                     {"type[]": "StudentEnrollment", "per_page": 100},
+                    reason=f"Inschrijvingen ophalen voor sectie {section_id}",
                 )
                 for s in students:
                     all_students[s["user_id"]] = s
@@ -558,6 +692,7 @@ def get_enrollments(course_id):
             students = canvas_get(
                 f"/api/v1/courses/{course_id}/enrollments",
                 {"type[]": "StudentEnrollment", "per_page": 100},
+                reason=f"Inschrijvingen ophalen voor cursus {course_id}",
             )
             return jsonify(students)
     except Exception as e:
@@ -567,7 +702,7 @@ def get_enrollments(course_id):
 @app.route("/api/me")
 def get_me():
     try:
-        user = canvas_get("/api/v1/users/self")
+        user = canvas_get("/api/v1/users/self", reason="Canvas API-verbinding verifiëren")
         return jsonify({"name": user.get("short_name") or user.get("name", "")})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -601,7 +736,7 @@ def save_config():
 
 @app.route("/api/settings", methods=["GET"])
 def get_settings_route():
-    return jsonify(_load_settings())
+    return jsonify({**_load_settings(), 'log_path': _LOG_FILE})
 
 
 @app.route("/api/settings", methods=["POST"])
@@ -639,13 +774,10 @@ def save_settings_route():
                 updates["pin_duration"] = val
         except (ValueError, TypeError):
             pass
-    if "default_score" in data:
-        try:
-            val = int(data["default_score"])
-            if val in (0, 1, 2):
-                updates["default_score"] = val
-        except (ValueError, TypeError):
-            pass
+    if "quiz_question" in data:
+        updates["quiz_question"] = str(data["quiz_question"] or "").strip()[:500]
+    if "logging_enabled" in data:
+        updates["logging_enabled"] = bool(data["logging_enabled"])
 
     saved = _save_settings(updates)
     CANVAS_BASE_URL = saved["canvas_base_url"]
@@ -654,6 +786,8 @@ def save_settings_route():
     if 'hidden_course_ids' in updates:
         _hidden_ids_cache = saved.get('hidden_course_ids')
         _startup_filter_done = True
+    if 'logging_enabled' in updates:
+        _setup_logger(bool(saved.get('logging_enabled', False)))
     return jsonify({"success": True, "settings": saved})
 
 
