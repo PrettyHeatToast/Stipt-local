@@ -587,16 +587,49 @@ def end_session():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/courses/<int:course_id>/sessions")
+def get_past_sessions(course_id):
+    """Return the check-in quizzes in this course that were started by the current teacher."""
+    try:
+        user = canvas_get("/api/v1/users/self", reason="Naam ophalen voor eerdere sessies")
+        me = user.get("short_name") or user.get("name", "")
+        groups = canvas_get(f"/api/v1/courses/{course_id}/assignment_groups", reason=f"Opdrachtengroepen ophalen voor cursus {course_id}")
+        group_ids = {g["id"] for g in groups if (g.get("name") or "").lower() == "aanwezigheden"}
+        if not me or not group_ids:
+            return jsonify([])
+        assignments = canvas_get(
+            f"/api/v1/courses/{course_id}/assignments",
+            {"search_term": "Aanwezigheid", "include[]": "overrides", "per_page": 100},
+            reason=f"Eerdere sessies ophalen voor cursus {course_id}",
+        )
+        prefix = f"Aanwezigheid – {me} – "
+        sessions = [
+            {
+                "id": a["id"],
+                "name": a.get("name", ""),
+                "created_at": a.get("created_at"),
+                "lock_at": a.get("lock_at"),
+                "section_ids": [o["course_section_id"] for o in a.get("overrides") or [] if o.get("course_section_id")],
+            }
+            for a in assignments
+            if a.get("assignment_group_id") in group_ids and (a.get("name") or "").startswith(prefix)
+        ]
+        sessions.sort(key=lambda s: s["created_at"] or "", reverse=True)
+        return jsonify(sessions)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/session/submissions")
 def get_submissions():
-    assignment_id = session_state.get("quiz_assignment_id")
-    course_id     = session_state.get("course_id")
+    assignment_id = request.args.get("assignment_id") or session_state.get("quiz_assignment_id")
+    course_id     = request.args.get("course_id") or session_state.get("course_id")
     if not assignment_id or not course_id:
         return jsonify([])
     try:
         subs = canvas_get(
             f"/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions",
-            {"per_page": 100},
+            {"per_page": 100, "include[]": "submission_comments"},
             reason=f"Inzendingen ophalen voor opdracht {assignment_id}",
         )
         return jsonify(subs)

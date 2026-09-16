@@ -433,6 +433,16 @@ Each entry follows: **name + one-liner**, *User-facing*, *Mechanics*, *Why it ex
 
 *LTI translation*: **Survives.** "Terug naar vakken" disappears (no courses screen) and the button just navigates back to the post-launch session list. Otherwise unchanged.
 
+#### "Sessie aanpassen" — reopen an earlier session
+
+*User-facing*: After picking a course the teacher chooses "Nieuwe sessie" or "Sessie aanpassen". The latter lists every check-in in that course with the teacher's name in the title (newest first, with date, sections and end time). Opening one shows the student table in "ended" mode so scores and "Niet behaald" criteria can still be changed, e.g. while going through all classes at the end of the day.
+
+*Mechanics*: `GET /api/courses/:id/sessions` filters assignments by the "Aanwezigheden" group and the `Aanwezigheid – <name> – ` title prefix, with `include[]=overrides` for the sections. The frontend sets `state.reviewMode`, loads submissions with comments for that assignment and rebuilds check-in (`submitted_at`/`attempt`), score and criterion (matched on comment text). Grade changes reuse `/api/session/grade`.
+
+*Why it exists*: Stipt.local has no database, so without this a session was unreachable once the teacher left the session screen; corrections had to be made directly in SpeedGrader.
+
+*LTI translation*: **Survives, simpler.** Sessions and records live in `attendanceSessions`/`attendanceRecords`, so the list is a query and no state has to be reverse-engineered from Canvas comments.
+
 #### Close-warning dialog mid-session
 
 *User-facing*: If the teacher tries to close the native Stipt.local window while a session is active, a modal warning appears: "There's an active session. Are you sure?" Confirming ends the session and force-closes the window.

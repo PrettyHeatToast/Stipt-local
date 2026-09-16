@@ -21,6 +21,8 @@ const state = {
   sessionInterval: null,
   sessionSeconds: 600,
   sessionEnded: false,
+  reviewMode: false,      // true when an earlier session was reopened to adjust scores
+  sessionDate: null,      // created_at of the reopened session
   settings: {
     sessionDuration: 600,
     pinDuration: 30,
@@ -29,7 +31,7 @@ const state = {
 };
 
 // ── Router ─────────────────────────────────────────────────────────
-const screens = ['setup', 'courses', 'sections', 'session'];
+const screens = ['setup', 'courses', 'course', 'sections', 'history', 'session'];
 
 function showScreen(name) {
   screens.forEach(s => {
@@ -404,7 +406,7 @@ function selectCourse(card) {
     name: card.dataset.name,
     course_code: card.dataset.code,
   };
-  navigate('sections');
+  navigate('course');
 }
 
 function renderSuggestions(list) {
@@ -435,7 +437,19 @@ document.getElementById('course-search').addEventListener('input', e => {
   renderCourses(filtered);
 });
 
-document.getElementById('back-to-courses').addEventListener('click', () => navigate('courses'));
+document.getElementById('back-to-courses').addEventListener('click', () => navigate('course'));
+
+// ── Screen 1b: Course menu ─────────────────────────────────────────
+function bindCardAction(card, action) {
+  card.addEventListener('click', action);
+  card.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); action(); }
+  });
+}
+
+document.getElementById('course-back-btn').addEventListener('click', () => navigate('courses'));
+bindCardAction(document.getElementById('course-new-session'), () => navigate('sections'));
+bindCardAction(document.getElementById('course-edit-session'), () => navigate('history'));
 
 // ── Screen 2: Sections ─────────────────────────────────────────────
 let allSections = [];
@@ -566,18 +580,108 @@ async function startSession() {
   }
 }
 
+// ── Screen 2b: Past sessions ───────────────────────────────────────
+document.getElementById('history-back-btn').addEventListener('click', () => navigate('course'));
+
+async function loadHistory() {
+  closeBanner('history-error');
+  document.getElementById('history-course-name').textContent = state.course.name;
+  document.getElementById('history-loading').style.display = '';
+  document.getElementById('history-list').style.display = 'none';
+  document.getElementById('history-empty').style.display = 'none';
+
+  try {
+    const [sessions, sections] = await Promise.all([
+      apiFetch(`/api/courses/${state.course.id}/sessions`),
+      apiFetch(`/api/courses/${state.course.id}/sections`),
+    ]);
+    allSections = sections;
+    renderHistory(sessions);
+  } catch (e) {
+    document.getElementById('history-loading').style.display = 'none';
+    showBanner('history-error', `Kon sessies niet laden: ${e.message}`);
+  }
+}
+
+function formatSessionDate(iso) {
+  const d = new Date(iso);
+  const date = d.toLocaleDateString('nl-BE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
+  const time = d.toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit' });
+  return `${date} · ${time}`;
+}
+
+function renderHistory(sessions) {
+  const listEl = document.getElementById('history-list');
+  document.getElementById('history-loading').style.display = 'none';
+  if (!sessions.length) {
+    document.getElementById('history-empty').style.display = '';
+    return;
+  }
+
+  const sectionNames = ids => ids.length
+    ? allSections.filter(s => ids.includes(s.id)).map(s => s.name).join(', ')
+    : 'Alle secties';
+
+  listEl.innerHTML = sessions.map((s, i) => {
+    const title = s.created_at ? formatSessionDate(s.created_at) : s.name;
+    const locked = s.lock_at && new Date(s.lock_at) <= new Date();
+    const end = locked
+      ? `beëindigd ${new Date(s.lock_at).toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit' })}`
+      : 'Nog open';
+    return `
+    <div class="card" tabindex="0" role="button" aria-label="${escHtml(title)}" data-index="${i}">
+      <div class="card-title">${escHtml(title)}</div>
+      <div class="card-sub">${escHtml(`${sectionNames(s.section_ids)} · ${end}`)}</div>
+    </div>`;
+  }).join('');
+  listEl.querySelectorAll('.card').forEach(card => {
+    bindCardAction(card, () => openPastSession(sessions[parseInt(card.dataset.index, 10)]));
+  });
+  listEl.style.display = '';
+}
+
+function openPastSession(s) {
+  state.quizAssignmentId = s.id;
+  state.selectedSections = s.section_ids.length ? s.section_ids : allSections.map(sec => sec.id);
+  state.quizQuestion = '';
+  state.currentPin = null;
+  state.sessionDate = s.created_at;
+  state.reviewMode = true;
+  state.sessionEnded = true;
+  navigate('session');
+}
+
 // ── Screen 3: Session ──────────────────────────────────────────────
+const END_SESSION_BTN_HTML = document.getElementById('end-session-btn').innerHTML;
+
+// showSessionEndedUI hides the PIN panel and timer; restore them for the next session
+function resetSessionUI() {
+  document.getElementById('pin-panel').style.display = '';
+  document.querySelector('.session-timer').style.display = '';
+  document.getElementById('end-session-btn').innerHTML = END_SESSION_BTN_HTML;
+  document.getElementById('session-ended-banner').style.display = 'none';
+}
+
 function initSession() {
   const sectionNames = allSections
     .filter(s => state.selectedSections.includes(s.id))
     .map(s => s.name).join(', ');
 
+  resetSessionUI();
   document.getElementById('session-course-name').textContent = state.course.name;
-  document.getElementById('session-sections-subtitle').textContent =
-    state.quizQuestion ? `${sectionNames} · Quizvraag: ${state.quizQuestion}` : sectionNames;
+  let subtitle = sectionNames;
+  if (state.reviewMode && state.sessionDate) subtitle = `${sectionNames} · ${formatSessionDate(state.sessionDate)}`;
+  else if (state.quizQuestion) subtitle = `${sectionNames} · Quizvraag: ${state.quizQuestion}`;
+  document.getElementById('session-sections-subtitle').textContent = subtitle;
 
   state.sectionMap = {};
   allSections.forEach(s => { state.sectionMap[s.id] = s.name; });
+
+  if (state.reviewMode) {
+    showSessionEndedUI();
+    loadStudents();
+    return;
+  }
 
   setPinDisplay(state.currentPin);
   startCountdown();
@@ -679,12 +783,22 @@ function updateCountdownUI(s) {
 }
 
 // ── Students ───────────────────────────────────────────────────────
+function submissionsUrl() {
+  return `/api/session/submissions?course_id=${state.course.id}&assignment_id=${state.quizAssignmentId}`;
+}
+
+// A student checked in when they submitted the quiz themselves. Absent students who got
+// grade 0 at the end of a session are 'graded' too, so workflow_state is not a signal.
+function hasCheckedIn(sub) {
+  return !!(sub.submitted_at || sub.attempt);
+}
+
 async function pollAndUpdateSubmissions() {
   if (!state.quizAssignmentId || state.sessionEnded) return;
-  const submissions = await apiFetch('/api/session/submissions').catch(() => []);
+  const submissions = await apiFetch(submissionsUrl()).catch(() => []);
   const gradePromises = [];
   (Array.isArray(submissions) ? submissions : [])
-    .filter(s => s.submitted_at || s.workflow_state !== 'unsubmitted')
+    .filter(hasCheckedIn)
     .forEach(s => {
       const uid = s.user_id;
       // Only handle each check-in once, so manual changes are never overridden
@@ -738,23 +852,19 @@ async function loadStudents() {
     const sectionIds = state.selectedSections.join(',');
     const [enrollments, submissions] = await Promise.all([
       apiFetch(`/api/courses/${state.course.id}/enrollments?section_ids=${sectionIds}`),
-      apiFetch('/api/session/submissions').catch(() => []),
+      apiFetch(submissionsUrl()).catch(() => []),
     ]);
+    const subs = Array.isArray(submissions) ? submissions : [];
     state.students = enrollments;
     state.attendance = {};
     state.motivations = {};
     state.feedbackCommentIds = {};
-
-    const submittedIds = new Set(
-      (Array.isArray(submissions) ? submissions : [])
-        .filter(s => s.submitted_at || (s.workflow_state !== 'unsubmitted'))
-        .map(s => s.user_id)
-    );
-    state.checkedIn = new Set(submittedIds);
+    state.checkedIn = new Set(subs.filter(hasCheckedIn).map(s => s.user_id));
 
     enrollments.forEach(e => {
-      state.attendance[e.user_id] = submittedIds.has(e.user_id) ? 1 : 0;
+      state.attendance[e.user_id] = state.checkedIn.has(e.user_id) ? 1 : 0;
     });
+    restoreScores(subs);
     document.getElementById('students-loading').style.display = 'none';
 
     if (!enrollments.length) {
@@ -766,6 +876,27 @@ async function loadStudents() {
     document.getElementById('students-loading').style.display = 'none';
     showBanner('pin-update-error', `Fout bij laden studenten: ${e.message}`);
   }
+}
+
+// Rebuild scores and feedback from Canvas, so an earlier session can be edited again.
+// The criterion is recognised by the exact comment text update_grade posts.
+function restoreScores(subs) {
+  const criterionByText = {};
+  CRITERIA.forEach(c => { criterionByText[`${c.title}: ${c.feedback}`] = c.key; });
+
+  subs.forEach(sub => {
+    const uid = sub.user_id;
+    if (!(uid in state.attendance)) return;
+    if (sub.score != null) state.attendance[uid] = sub.score >= 1 ? 1 : 0;
+
+    const feedback = (sub.submission_comments || [])
+      .filter(c => criterionByText[c.comment])
+      .sort((a, b) => a.id - b.id)
+      .pop();
+    if (!feedback) return;
+    state.feedbackCommentIds[uid] = feedback.id;
+    if (state.attendance[uid] === 0) state.motivations[uid] = criterionByText[feedback.comment];
+  });
 }
 
 function sortedFilteredStudents() {
@@ -813,6 +944,7 @@ function renderTable() {
     const motivated = !!state.motivations[uid];
     const { label, cls } = scoreInfo(uid);
     const lowerLabel = motivated ? `Wijzig motivatie voor ${name}` : `Verlaag aanwezigheid voor ${name}`;
+    const canRaise = canRaiseToPresent(uid);
 
     return `<tr data-uid="${uid}">
       <td>${escHtml(name)}</td>
@@ -821,7 +953,8 @@ function renderTable() {
       <td>
         <div class="actions-cell">
           <button class="btn-icon" aria-label="Verhoog aanwezigheid voor ${escHtml(name)}"
-            data-uid="${uid}" data-action="raise" ${score >= 1 ? 'disabled' : ''}>+</button>
+            title="${canRaise ? 'Verhoog' : 'Enkel studenten die zelf ingecheckt hebben kunnen aanwezig zijn'}"
+            data-uid="${uid}" data-action="raise" ${canRaise ? '' : 'disabled'}>+</button>
           <button class="btn-icon" aria-label="${escHtml(lowerLabel)}" title="${motivated ? 'Wijzig motivatie' : 'Verlaag'}"
             data-uid="${uid}" data-action="lower" ${score === 0 && !motivated ? 'disabled' : ''}>−</button>
         </div>
@@ -844,7 +977,14 @@ function scoreInfo(uid) {
   return { label: 'Afwezig', cls: 'badge-absent', rank: 0 };
 }
 
+// Only a check-in makes a student present: the teacher can undo a "Niet behaald",
+// but never mark a student who did not check in as present.
+function canRaiseToPresent(uid) {
+  return state.checkedIn.has(uid) && (state.attendance[uid] ?? 0) === 0;
+}
+
 function raiseToPresent(uid) {
+  if (!canRaiseToPresent(uid)) return;
   state.attendance[uid] = 1;
   delete state.motivations[uid];
   renderTable();
@@ -995,7 +1135,8 @@ function showSessionEndedUI() {
   document.querySelector('.session-timer').style.display = 'none';
 
   const btn = document.getElementById('end-session-btn');
-  btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg> Terug naar vakken`;
+  const label = state.reviewMode ? 'Terug naar sessies' : 'Terug naar vakken';
+  btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg> ${label}`;
 
   document.getElementById('session-ended-banner').style.display = 'flex';
 }
@@ -1011,16 +1152,26 @@ function leaveSession() {
   state.checkedIn = new Set();
   state.gradeQueue = {};
   state.sessionEnded = false;
-  navigate('courses');
+  const wasReview = state.reviewMode;
+  state.reviewMode = false;
+  state.sessionDate = null;
+  navigate(wasReview ? 'history' : 'courses');
 }
 
 // ── Hash Routing / Screen Enter Hooks ─────────────────────────────
 function onScreenEnter(name) {
   if (name === 'courses') {
     loadCourses();
+  } else if (name === 'course') {
+    if (!state.course) { navigate('courses'); return; }
+    document.getElementById('course-menu-name').textContent = state.course.name;
   } else if (name === 'sections') {
     if (!state.course) { navigate('courses'); return; }
+    state.reviewMode = false;
     loadSections();
+  } else if (name === 'history') {
+    if (!state.course) { navigate('courses'); return; }
+    loadHistory();
   } else if (name === 'session') {
     if (!state.quizAssignmentId) return;
     initSession();

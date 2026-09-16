@@ -69,8 +69,12 @@ The quiz is worth 1 point and contains one open (essay) question. Answering it i
 | Aanwezig (checked in) | 1 | 1 | — |
 | Niet behaald (lowered by teacher) | 0 | 0 | `<criterion title>: <Niet behaald feedback>` |
 
-Lowering a student from 1 to 0 requires one of the four rubric criteria in `_CRITERIA` (`app.py`). Only the "Niet behaald" feedback is stored and posted; the "Behaald" column is never sent. Picking another criterion replaces the comment, raising the student back to 1 deletes it. Grade syncs to Canvas on every score change, and absent students receive grade 0 automatically when the session ends.
+Lowering a student from 1 to 0 requires one of the four rubric criteria in `_CRITERIA` (`app.py`). Only the "Niet behaald" feedback is stored and posted; the "Behaald" column is never sent. Picking another criterion replaces the comment, raising the student back to 1 deletes it. Only students who checked in themselves can be raised to 1; a teacher can never manually mark a student present. Grade syncs to Canvas on every score change, and absent students receive grade 0 automatically when the session ends.
 
 ## Frontend architecture
 
-Single-page app with hash-based routing (`#screen-setup`, `#screen-courses`, `#screen-sections`, `#screen-session`). All state lives in the `state` object. The PIN panel is a native **pywebview** window rendering `pip.html`, which polls `/api/pip/state` every 500 ms for live PIN and timer updates.
+Single-page app with hash-based routing (`#screen-setup`, `#screen-courses`, `#screen-course`, `#screen-sections`, `#screen-history`, `#screen-session`). Picking a course opens `#screen-course`, which offers "Nieuwe sessie" (sections → live session) or "Sessie aanpassen" (history → reopened session). All state lives in the `state` object. The PIN panel is a native **pywebview** window rendering `pip.html`, which polls `/api/pip/state` every 500 ms for live PIN and timer updates.
+
+### Reopening a session
+
+`GET /api/courses/:id/sessions` lists assignments in the "Aanwezigheden" group whose title starts with `Aanwezigheid – <teacher short_name> – `, with section ids taken from their overrides. A reopened session uses the session screen with `state.reviewMode` and `state.sessionEnded` set, so there is no PIN, timer or server-side `session_state`. Everything is rebuilt from the submissions (`include[]=submission_comments`): a student checked in when `submitted_at` or `attempt` is set (not `workflow_state`, because absent students graded 0 are `graded` too). The score comes from `score`, and the criterion is recognised by the exact comment text `<title>: <feedback>`, whose id becomes `feedbackCommentIds[uid]`. Opening a session writes nothing to Canvas; only score changes sync.
