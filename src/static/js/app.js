@@ -728,8 +728,9 @@ function initSession() {
   }
 
   setPinDisplay(state.currentPin);
-  startCountdown();
-  startSessionTimer();
+  const startedAt = Date.now();
+  startCountdown(startedAt);
+  startSessionTimer(startedAt);
   loadStudents();
 }
 
@@ -774,9 +775,9 @@ function secondsUntil(deadline) {
   return Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
 }
 
-function startSessionTimer() {
+function startSessionTimer(startedAt = Date.now()) {
   if (state.sessionInterval) clearInterval(state.sessionInterval);
-  state.sessionDeadline = Date.now() + state.settings.sessionDuration * 1000;
+  state.sessionDeadline = startedAt + state.settings.sessionDuration * 1000;
   state.sessionSeconds = state.settings.sessionDuration;
   updateSessionTimerUI(state.settings.sessionDuration);
   state.sessionInterval = setInterval(tickSessionTimer, 1000);
@@ -805,9 +806,9 @@ function updateSessionTimerUI(s) {
 // ── Countdown ──────────────────────────────────────────────────────
 const CIRCUMFERENCE = 2 * Math.PI * 54; // 339.29
 
-function startCountdown() {
+function startCountdown(startedAt = Date.now()) {
   if (state.countdownInterval) clearInterval(state.countdownInterval);
-  state.pinDeadline = Date.now() + state.settings.pinDuration * 1000;
+  state.pinDeadline = startedAt + state.settings.pinDuration * 1000;
   state.countdownSeconds = state.settings.pinDuration;
   updateCountdownUI(state.settings.pinDuration);
   state.countdownInterval = setInterval(tickCountdown, 1000);
@@ -816,8 +817,11 @@ function startCountdown() {
 async function tickCountdown() {
   if (!state.countdownInterval) return;
   if (secondsUntil(state.pinDeadline) <= 0) {
-    state.pinDeadline = Date.now() + state.settings.pinDuration * 1000;
-    state.countdownSeconds = state.settings.pinDuration;
+    // Advance from the previous deadline, not from now: a tick lands up to a second late,
+    // and restarting from now added that lag to every rotation (~5 s behind after 5 minutes).
+    const period = state.settings.pinDuration * 1000;
+    while (state.pinDeadline <= Date.now()) state.pinDeadline += period;
+    state.countdownSeconds = secondsUntil(state.pinDeadline);
     updateCountdownUI(state.countdownSeconds);
     if (state.rotating) return;
     state.rotating = true;
