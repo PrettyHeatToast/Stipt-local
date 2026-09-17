@@ -6,7 +6,7 @@ Local attendance tracking app for teachers, built on top of Canvas LMS. A Flask 
 
 - Python 3.10+
 - Canvas teacher or TA access on the target course
-- The course must have an assignment group named **"Aanwezigheden"** (case-insensitive)
+- Sessions are placed in the assignment group **"Werkplekleren@Campus"**; the app creates it when the course does not have it yet
 - The **New Quizzes** LTI must be enabled on your Canvas instance
 
 ## Running from source

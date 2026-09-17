@@ -254,11 +254,11 @@ Each entry follows: **name + one-liner**, *User-facing*, *Mechanics*, *Why it ex
 
 *LTI translation*: **Survives, repositioned.** Canvas New Quizzes' IP filtering is gone with the New Quizzes API itself. Stipt.Cloud must enforce the filter server-side at the check-in endpoint, comparing the requesting IP to an institution-level allow-list. The schema as drawn has no `allowedIPs` column anywhere — open question (section 6) on whether this is institution-level config, env-var-driven, or per-session override. The current `193.191.137.192/26` becomes one row in whatever institution-config table gets drawn.
 
-#### Assignment-group lookup ("Aanwezigheden")
+#### Assignment-group lookup ("Werkplekleren@Campus")
 
-*User-facing*: Invisible. Required setup: the Canvas course must have an assignment group named "Aanwezigheden" (case-insensitive). If missing, session start fails with "Geen 'Aanwezigheden'-groep gevonden in deze cursus."
+*User-facing*: Invisible. No setup required: sessions go into the assignment group "Werkplekleren@Campus" (case-insensitive), which is created when the course does not have it yet.
 
-*Mechanics*: Before step 1 of the create-quiz flow, the frontend GETs `/api/courses/:id/assignment_groups` ([src/app.py:341-347](../src/app.py#L341), called at [src/static/js/app.js:535](../src/static/js/app.js#L535)) and finds the group whose name matches "aanwezigheden" lowercased. Its ID is passed as `assignment_group_id` in step 1 of quiz creation.
+*Mechanics*: Before step 1 of the create-quiz flow, `_ensure_assignment_group` in [src/app.py](../src/app.py) GETs the course's assignment groups and picks the one named "werkplekleren@campus" lowercased, or POSTs `/api/v1/courses/:id/assignment_groups` to create it. Its ID is passed as `assignment_group_id` in step 1 of quiz creation. The older "Aanwezigheden" group is only read when listing past sessions.
 
 *Why it exists*: The institution wants attendance assignments segregated from graded course work in the gradebook. Pinning every session to a known group keeps gradebook columns organized.
 
@@ -437,7 +437,7 @@ Each entry follows: **name + one-liner**, *User-facing*, *Mechanics*, *Why it ex
 
 *User-facing*: After picking a course the teacher chooses "Nieuwe sessie" or "Sessie aanpassen". The latter lists every check-in in that course with the teacher's name in the title (newest first, with date, sections and end time). Opening one shows the student table in "ended" mode so scores and "Niet behaald" criteria can still be changed, e.g. while going through all classes at the end of the day.
 
-*Mechanics*: `GET /api/courses/:id/sessions` filters assignments by the "Aanwezigheden" group and the `Aanwezigheid – <name> – ` title prefix, with `include[]=overrides` for the sections. The frontend sets `state.reviewMode`, loads submissions with comments for that assignment and rebuilds check-in (`submitted_at`/`attempt`), score and criterion (matched on comment text). Grade changes reuse `/api/session/grade`.
+*Mechanics*: `GET /api/courses/:id/sessions` filters assignments by the "Werkplekleren@Campus" group (or the older "Aanwezigheden" group) and the `Werkplekleren@Campus – <name> – ` title prefix (or the older `Aanwezigheid – <name> – `), with `include[]=overrides` for the sections. The frontend sets `state.reviewMode`, loads submissions with comments for that assignment and rebuilds check-in (`submitted_at`/`attempt`), score and criterion (matched on comment text). Grade changes reuse `/api/session/grade`.
 
 *Why it exists*: Stipt.local has no database, so without this a session was unreachable once the teacher left the session screen; corrections had to be made directly in SpeedGrader.
 
@@ -445,9 +445,9 @@ Each entry follows: **name + one-liner**, *User-facing*, *Mechanics*, *Why it ex
 
 #### Close-warning dialog mid-session
 
-*User-facing*: If the teacher tries to close the native Stipt.local window while a session is active, a modal warning appears: "There's an active session. Are you sure?" Confirming ends the session and force-closes the window.
+*User-facing*: If the teacher tries to close the native Stipt.local window while a check-in is active, a modal warns that the current session will be closed. Confirming shows a spinner while the check-in is ended (quiz locked, absent students graded 0), then closes the window. If Canvas refuses to lock the quiz, the modal shows the error and offers "Toch afsluiten".
 
-*Mechanics*: [src/templates/partials/_dialogs.html:2](../src/templates/partials/_dialogs.html#L2) defines a `<dialog id="close-warning-dialog">`. JS at [src/static/js/app.js:211-222](../src/static/js/app.js#L211) shows it, and on confirm calls `endSession()` then `window.pywebview.api.force_close()` ([src/app.py:732-760](../src/app.py#L732)) — the native window-close handler is intercepted by pywebview and routed through this confirmation.
+*Mechanics*: `<dialog id="close-warning-dialog">` lives in [src/templates/partials/_dialogs.html](../src/templates/partials/_dialogs.html). The pywebview `closing` hook in [src/app.py](../src/app.py) cancels the close when `session_state` has a `quiz_assignment_id` and calls `showCloseWarning()` ([src/static/js/app.js](../src/static/js/app.js)). On confirm the JS awaits `endSession()`, which returns the `/api/session/end` error (or `null`), then calls `window.pywebview.api.force_close()`. That sets `_close_confirmed` so the hook lets the second close through even when the session could not be ended. In browser mode (`python app.py`) a `beforeunload` prompt appears instead, and `pagehide` sends a `sendBeacon('/api/session/end')` so the quiz is still locked (absent students are not graded there).
 
 *Why it exists*: Stipt.local has no server-side state. Closing the app mid-session loses session context — late check-ins can't be recorded, the absent-flush doesn't run, and any unsaved state in `session_state` evaporates. The warning gives the teacher a chance to bail out cleanly.
 

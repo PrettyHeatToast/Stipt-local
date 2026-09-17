@@ -185,6 +185,7 @@ _pip_state: dict = {
 }
 _pip_window = None
 _main_window = None
+_close_confirmed = False  # set once the teacher confirmed closing, so the closing hook lets it through
 
 
 def _sync_pip_from_settings(s: dict = None):
@@ -378,20 +379,29 @@ def get_sections(course_id):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/courses/<int:course_id>/assignment_groups")
-def get_assignment_groups(course_id):
-    try:
-        groups = canvas_get(f"/api/v1/courses/{course_id}/assignment_groups", reason=f"Opdrachtengroepen ophalen voor cursus {course_id}")
-        return jsonify(groups)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+ASSIGNMENT_GROUP = "Werkplekleren@Campus"
+# Group used before the rename, older sessions still live there
+_LEGACY_ASSIGNMENT_GROUP = "Aanwezigheden"
+
+
+def _ensure_assignment_group(course_id) -> int:
+    """Return the id of the Werkplekleren@Campus group, creating it when the course has none."""
+    groups = canvas_get(f"/api/v1/courses/{course_id}/assignment_groups", reason=f"Opdrachtengroepen ophalen voor cursus {course_id}")
+    for g in groups:
+        if (g.get("name") or "").lower() == ASSIGNMENT_GROUP.lower():
+            return g["id"]
+    url = f"{CANVAS_BASE_URL}/api/v1/courses/{course_id}/assignment_groups"
+    resp = requests.post(url, json={"name": ASSIGNMENT_GROUP},
+                         headers={"Authorization": f"Bearer {CANVAS_API_TOKEN}"})
+    _log_api('POST', url, f"Opdrachtengroep '{ASSIGNMENT_GROUP}' aanmaken voor cursus {course_id}", resp.status_code)
+    resp.raise_for_status()
+    return resp.json()["id"]
 
 
 @app.route("/api/courses/<int:course_id>/create_quiz", methods=["POST"])
 def create_quiz(course_id):
     data = request.get_json()
     title = data.get("title")
-    assignment_group_id = data.get("assignment_group_id")
     pin = data.get("pin")
     section_ids = data.get("section_ids", [])
 
@@ -402,7 +412,6 @@ def create_quiz(course_id):
     payload = {
         "quiz": {
             "title": title,
-            "assignment_group_id": assignment_group_id,
             "quiz_settings": {
                 "require_student_access_code": True,
                 "student_access_code": pin,
@@ -421,6 +430,9 @@ def create_quiz(course_id):
         return resp
 
     try:
+        assignment_group_id = _ensure_assignment_group(course_id)
+        payload["quiz"]["assignment_group_id"] = assignment_group_id
+
         # 1. Create the New Quiz
         resp = checked(1, requests.post(
             f"{CANVAS_BASE_URL}/api/quiz/v1/courses/{course_id}/quizzes",
@@ -500,6 +512,8 @@ def create_quiz(course_id):
         session_state["course_id"] = course_id
         session_state["current_pin"] = pin
         _pip_state["session_active"] = True
+        _pip_state["pin_deadline"] = None
+        _pip_state["session_deadline"] = None
         return jsonify({"quiz_assignment_id": assignment_id, "quiz": quiz_data, "question": question})
     except requests.HTTPError as e:
         return jsonify({"error": f"Canvas API fout: {e}"}), e.response.status_code
@@ -561,7 +575,7 @@ def end_session():
         )
         _log_api('GET', f"{CANVAS_BASE_URL}/api/v1/courses/{course_id}/assignments/{assignment_id}", "Opdracht ophalen om sessie te beëindigen", assign_resp.status_code)
         assign_resp.raise_for_status()
-        current_title = assign_resp.json().get("name", "Aanwezigheid")
+        current_title = assign_resp.json().get("name", "Werkplekleren@Campus")
 
         now = datetime.datetime.now()
         end_time = now.strftime("%H:%M")
@@ -594,15 +608,17 @@ def get_past_sessions(course_id):
         user = canvas_get("/api/v1/users/self", reason="Naam ophalen voor eerdere sessies")
         me = user.get("short_name") or user.get("name", "")
         groups = canvas_get(f"/api/v1/courses/{course_id}/assignment_groups", reason=f"Opdrachtengroepen ophalen voor cursus {course_id}")
-        group_ids = {g["id"] for g in groups if (g.get("name") or "").lower() == "aanwezigheden"}
+        group_names = {ASSIGNMENT_GROUP.lower(), _LEGACY_ASSIGNMENT_GROUP.lower()}
+        group_ids = {g["id"] for g in groups if (g.get("name") or "").lower() in group_names}
         if not me or not group_ids:
             return jsonify([])
         assignments = canvas_get(
             f"/api/v1/courses/{course_id}/assignments",
-            {"search_term": "Aanwezigheid", "include[]": "overrides", "per_page": 100},
+            {"search_term": me, "include[]": "overrides", "per_page": 100},
             reason=f"Eerdere sessies ophalen voor cursus {course_id}",
         )
-        prefix = f"Aanwezigheid – {me} – "
+        # "Aanwezigheid" is the title prefix used before the rename, keep those sessions reachable
+        prefixes = tuple(f"{t} – {me} – " for t in ("Werkplekleren@Campus", "Aanwezigheid"))
         sessions = [
             {
                 "id": a["id"],
@@ -612,7 +628,7 @@ def get_past_sessions(course_id):
                 "section_ids": [o["course_section_id"] for o in a.get("overrides") or [] if o.get("course_section_id")],
             }
             for a in assignments
-            if a.get("assignment_group_id") in group_ids and (a.get("name") or "").startswith(prefix)
+            if a.get("assignment_group_id") in group_ids and (a.get("name") or "").startswith(prefixes)
         ]
         sessions.sort(key=lambda s: s["created_at"] or "", reverse=True)
         return jsonify(sessions)
@@ -863,6 +879,8 @@ class JsApi:
         _pip_window.events.closed += _on_closed
 
     def force_close(self):
+        global _close_confirmed
+        _close_confirmed = True
         if _main_window:
             _main_window.destroy()
 
@@ -878,6 +896,16 @@ class JsApi:
 
 if __name__ == "__main__":
     if getattr(sys, 'frozen', False) or os.environ.get("STIPT_WEBVIEW"):
+        # WebView2 throttles timers in minimised or covered windows, which froze the PIN
+        # countdown while the teacher presents. This env var replaces pywebview's own
+        # AdditionalBrowserArguments, so its ElasticOverscroll flag is repeated here.
+        os.environ.setdefault(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            "--disable-features=ElasticOverscroll,CalculateNativeWinOcclusion "
+            "--disable-background-timer-throttling "
+            "--disable-renderer-backgrounding "
+            "--disable-backgrounding-occluded-windows",
+        )
         import webview
         t = threading.Thread(target=_run_flask, daemon=True)
         t.start()
@@ -900,7 +928,8 @@ if __name__ == "__main__":
         )
 
         def _on_main_closing():
-            if session_state.get("quiz_assignment_id"):
+            # Without the flag a failed session end would reopen the warning on every close attempt
+            if not _close_confirmed and session_state.get("quiz_assignment_id"):
                 threading.Thread(
                     target=lambda: _main_window.evaluate_js("showCloseWarning()"),
                     daemon=True

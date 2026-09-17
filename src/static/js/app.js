@@ -18,8 +18,11 @@ const state = {
   studentFilter: '',
   countdownInterval: null,
   countdownSeconds: 30,
+  pinDeadline: null,      // epoch ms when the current PIN rotates
+  rotating: false,        // true while a PIN rotation is talking to Canvas
   sessionInterval: null,
   sessionSeconds: 600,
+  sessionDeadline: null,  // epoch ms when check-in closes
   sessionEnded: false,
   reviewMode: false,      // true when an earlier session was reopened to adjust scores
   sessionDate: null,      // created_at of the reopened session
@@ -206,6 +209,8 @@ function syncNativePip() {
       seconds_left: state.countdownSeconds,
       total_seconds: state.settings.pinDuration,
       session_seconds: state.sessionSeconds,
+      pin_deadline: state.pinDeadline,
+      session_deadline: state.sessionDeadline,
       theme: document.documentElement.getAttribute('data-theme'),
     }),
   }).catch(() => {});
@@ -215,17 +220,64 @@ function syncNativePip() {
 const PIP_FB_CIRC = 2 * Math.PI * 36;
 
 // ── Close-warning dialog ────────────────────────────────────────────
+// Native only: the pywebview closing hook calls this while a check-in is active on the server.
+const closeWarning = { busy: false, failed: false };
+
 function showCloseWarning() {
-  document.getElementById('close-warning-dialog').showModal();
+  const dialog = document.getElementById('close-warning-dialog');
+  if (dialog.open) return;
+  closeWarning.failed = false;
+  setCloseWarningBusy(false);
+  document.getElementById('cw-error').hidden = true;
+  document.getElementById('cw-confirm-label').textContent = 'Sessie afsluiten en sluiten';
+  dialog.showModal();
 }
+
+function setCloseWarningBusy(busy) {
+  closeWarning.busy = busy;
+  document.getElementById('cw-cancel').disabled = busy;
+  document.getElementById('cw-confirm').disabled = busy;
+  document.getElementById('cw-confirm-spinner').hidden = !busy;
+  if (busy) document.getElementById('cw-confirm-label').textContent = 'Sessie afsluiten…';
+}
+
+document.getElementById('close-warning-dialog').addEventListener('cancel', e => {
+  if (closeWarning.busy) e.preventDefault();
+});
 document.getElementById('cw-cancel').addEventListener('click', () => {
   document.getElementById('close-warning-dialog').close();
 });
 document.getElementById('cw-confirm').addEventListener('click', async () => {
-  document.getElementById('close-warning-dialog').close();
-  await endSession();
+  // Second click after a failed end: the teacher chose to close anyway
+  if (!closeWarning.failed) {
+    setCloseWarningBusy(true);
+    const error = await endSession();
+    setCloseWarningBusy(false);
+    if (error) {
+      closeWarning.failed = true;
+      const errorEl = document.getElementById('cw-error');
+      errorEl.textContent = `De check-in kon niet afgesloten worden in Canvas (${error}). Studenten kunnen mogelijk nog inchecken.`;
+      errorEl.hidden = false;
+      document.getElementById('cw-confirm-label').textContent = 'Toch afsluiten';
+      return;
+    }
+  }
   if (window.pywebview) window.pywebview.api.force_close();
 });
+
+// Browser fallback (python app.py): a custom modal is impossible on unload, so use the browser's
+// own prompt and lock the quiz on the way out. Grading absent students needs the page, so that is skipped.
+function hasActiveCheckin() {
+  return !!state.quizAssignmentId && !state.sessionEnded && !state.reviewMode;
+}
+if (!IS_NATIVE) {
+  window.addEventListener('beforeunload', e => {
+    if (hasActiveCheckin()) e.preventDefault();
+  });
+  window.addEventListener('pagehide', () => {
+    if (hasActiveCheckin()) navigator.sendBeacon('/api/session/end');
+  });
+}
 
 function openPipFallback() {
   const dialog = document.getElementById('pip-fallback-dialog');
@@ -548,23 +600,15 @@ async function startSession() {
   spinner.style.display = '';
 
   try {
-    // Find assignment group
-    const groups = await apiFetch(`/api/courses/${state.course.id}/assignment_groups`);
-    const group = groups.find(g => g.name.toLowerCase() === 'aanwezigheden');
-    if (!group) {
-      showBanner('sections-error', "Geen 'Aanwezigheden' toewijzingsgroep gevonden. Maak deze aan in Canvas.");
-      return;
-    }
-
     const pin = generatePin();
     const today = new Date().toLocaleDateString('nl-BE', { day: '2-digit', month: '2-digit', year: 'numeric' });
     const me = await apiFetch('/api/me').catch(() => ({ name: '' }));
-    const title = me.name ? `Aanwezigheid – ${me.name} – ${today}` : `Aanwezigheid – ${today}`;
+    const title = me.name ? `Werkplekleren@Campus – ${me.name} – ${today}` : `Werkplekleren@Campus – ${today}`;
 
     const result = await apiFetch(`/api/courses/${state.course.id}/create_quiz`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, assignment_group_id: group.id, pin, section_ids: state.selectedSections }),
+      body: JSON.stringify({ title, pin, section_ids: state.selectedSections }),
     });
 
     state.quizAssignmentId = result.quiz_assignment_id;
@@ -724,20 +768,29 @@ async function rotatePin() {
 }
 
 // ── Session timer ──────────────────────────────────────────────────
+// Timers count down to a wall-clock deadline instead of decrementing per tick: WebView2
+// throttles timers in a minimised or covered window, and a late tick must catch up, not drift.
+function secondsUntil(deadline) {
+  return Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+}
+
 function startSessionTimer() {
   if (state.sessionInterval) clearInterval(state.sessionInterval);
+  state.sessionDeadline = Date.now() + state.settings.sessionDuration * 1000;
   state.sessionSeconds = state.settings.sessionDuration;
   updateSessionTimerUI(state.settings.sessionDuration);
+  state.sessionInterval = setInterval(tickSessionTimer, 1000);
+}
 
-  state.sessionInterval = setInterval(() => {
-    state.sessionSeconds--;
-    updateSessionTimerUI(state.sessionSeconds);
-    if (state.sessionSeconds <= 0) {
-      clearInterval(state.sessionInterval);
-      state.sessionInterval = null;
-      endSession();
-    }
-  }, 1000);
+function tickSessionTimer() {
+  if (!state.sessionInterval) return;
+  state.sessionSeconds = secondsUntil(state.sessionDeadline);
+  updateSessionTimerUI(state.sessionSeconds);
+  if (state.sessionSeconds <= 0) {
+    clearInterval(state.sessionInterval);
+    state.sessionInterval = null;
+    endSession();
+  }
 }
 
 function updateSessionTimerUI(s) {
@@ -754,19 +807,32 @@ const CIRCUMFERENCE = 2 * Math.PI * 54; // 339.29
 
 function startCountdown() {
   if (state.countdownInterval) clearInterval(state.countdownInterval);
+  state.pinDeadline = Date.now() + state.settings.pinDuration * 1000;
   state.countdownSeconds = state.settings.pinDuration;
   updateCountdownUI(state.settings.pinDuration);
-
-  state.countdownInterval = setInterval(async () => {
-    state.countdownSeconds--;
-    updateCountdownUI(state.countdownSeconds);
-    if (state.countdownSeconds <= 0) {
-      state.countdownSeconds = state.settings.pinDuration;
-      updateCountdownUI(state.settings.pinDuration);
-      await rotatePin();
-    }
-  }, 1000);
+  state.countdownInterval = setInterval(tickCountdown, 1000);
 }
+
+async function tickCountdown() {
+  if (!state.countdownInterval) return;
+  if (secondsUntil(state.pinDeadline) <= 0) {
+    state.pinDeadline = Date.now() + state.settings.pinDuration * 1000;
+    state.countdownSeconds = state.settings.pinDuration;
+    updateCountdownUI(state.countdownSeconds);
+    if (state.rotating) return;
+    state.rotating = true;
+    try { await rotatePin(); } finally { state.rotating = false; }
+    return;
+  }
+  state.countdownSeconds = secondsUntil(state.pinDeadline);
+  updateCountdownUI(state.countdownSeconds);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  tickSessionTimer();
+  tickCountdown();
+});
 
 function updateCountdownUI(s) {
   const ring = document.getElementById('countdown-ring');
@@ -1103,6 +1169,8 @@ document.getElementById('end-confirm-yes').addEventListener('click', () => {
 async function endSession() {
   if (state.countdownInterval) { clearInterval(state.countdownInterval); state.countdownInterval = null; }
   if (state.sessionInterval)   { clearInterval(state.sessionInterval);   state.sessionInterval = null; }
+  state.pinDeadline = null;
+  state.sessionDeadline = null;
   document.getElementById('end-confirm').classList.remove('show');
   if (pipWindow) { pipWindow.close(); pipWindow = null; }
   if (pipNativeOpen && window.pywebview) {
@@ -1112,8 +1180,9 @@ async function endSession() {
   closePipFallback();
   updatePipBtn();
 
-  // Rename and unpublish the quiz in Canvas (best-effort)
-  try { await apiFetch('/api/session/end', { method: 'POST' }); } catch (_) {}
+  // Rename and lock the quiz in Canvas (best-effort; the error is returned for the close warning)
+  let endError = null;
+  try { await apiFetch('/api/session/end', { method: 'POST' }); } catch (e) { endError = e.message; }
 
   // Final poll — capture any last-second submissions before flushing absents
   await pollAndUpdateSubmissions();
@@ -1128,6 +1197,7 @@ async function endSession() {
   state.sessionEnded = true;
   state.currentPin = null;
   showSessionEndedUI();
+  return endError;
 }
 
 function showSessionEndedUI() {

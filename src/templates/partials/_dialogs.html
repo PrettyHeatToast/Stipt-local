@@ -1,10 +1,15 @@
 <!-- ── Close-warning dialog ──────────────────────────────────────── -->
-<dialog id="close-warning-dialog" aria-label="Bevestig afsluiten">
-  <p>Er is nog een actieve check-in sessie.<br><br>
-     Wil je de app toch afsluiten? Studenten kunnen daarna de quiz niet meer indienen.</p>
+<dialog id="close-warning-dialog" aria-labelledby="cw-title">
+  <h2 class="cw-title" id="cw-title">App afsluiten?</h2>
+  <p id="cw-message">De check-in loopt nog. Als je de app afsluit, wordt de huidige sessie afgesloten:
+     studenten kunnen niet meer inchecken en wie nog niet ingecheckt is, wordt als afwezig geregistreerd.</p>
+  <p class="cw-error" id="cw-error" role="alert" hidden></p>
   <div class="cw-actions">
-    <button class="btn btn-ghost" id="cw-cancel">Annuleer</button>
-    <button class="btn btn-danger" id="cw-confirm">Ja, afsluiten</button>
+    <button class="btn btn-ghost" id="cw-cancel" type="button">Annuleer</button>
+    <button class="btn btn-danger" id="cw-confirm" type="button">
+      <span id="cw-confirm-label">Sessie afsluiten en sluiten</span>
+      <span id="cw-confirm-spinner" class="spinner" hidden></span>
+    </button>
   </div>
 </dialog>
 

@@ -59,41 +59,59 @@ function formatTime(s) {
   return `${m}:${sec}`;
 }
 
+// Fetching and drawing are separate: the timers are drawn from the deadlines pushed by the
+// main window, so they keep ticking when a poll is slow or the main window is throttled.
+let state = null;
+let stopped = false;
+
+function secondsLeft(deadline, fallback) {
+  if (!deadline) return fallback;
+  return Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+}
+
 async function poll() {
+  const controller = new AbortController();
+  const timeout    = setTimeout(() => controller.abort(), 2000);
   try {
-    const r     = await fetch('/api/pip/state');
-    const state = await r.json();
-
+    const r = await fetch('/api/pip/state', { signal: controller.signal, cache: 'no-store' });
+    state   = await r.json();
     if (state.session_active === false) {
-      if (window.pywebview) window.pywebview.api.close_pip();
-      return;
+      stopped = true;
+      window.pywebview?.api?.close_pip?.();
     }
+  } catch (_) {
+  } finally {
+    clearTimeout(timeout);
+    if (!stopped) setTimeout(poll, 500);
+  }
+}
 
-    document.documentElement.setAttribute('data-theme', state.theme || 'light');
+function render() {
+  if (!state || stopped) return;
 
-    for (let i = 0; i < 4; i++) {
-      document.getElementById(`pip-d${i}`).textContent = (state.pin || '0000')[i] || '0';
-    }
+  document.documentElement.setAttribute('data-theme', state.theme || 'light');
 
-    const s     = state.seconds_left ?? 30;
-    const total = state.total_seconds || 30;
-    const color = s > 300 ? 'var(--color-success)' : s > 120 ? 'var(--color-warning)' : 'var(--color-error)';
-    const ring  = document.getElementById('pip-ring');
-    ring.style.strokeDashoffset = PIP_CIRC * (1 - s / total);
-    ring.style.stroke           = color;
-    document.getElementById('pip-text').textContent = formatTime(s);
+  for (let i = 0; i < 4; i++) {
+    document.getElementById(`pip-d${i}`).textContent = (state.pin || '0000')[i] || '0';
+  }
 
-    const ss      = state.session_seconds ?? 600;
-    const sesEl   = document.getElementById('pip-session-timer');
-    sesEl.textContent = formatTime(ss);
-    sesEl.classList.toggle('warning', ss <= 120 && ss > 60);
-    sesEl.classList.toggle('urgent',  ss <= 60);
-  } catch (_) {}
+  const total = state.total_seconds || 30;
+  const s     = Math.min(total, secondsLeft(state.pin_deadline, state.seconds_left ?? 30));
+  const color = s > 300 ? 'var(--color-success)' : s > 120 ? 'var(--color-warning)' : 'var(--color-error)';
+  const ring  = document.getElementById('pip-ring');
+  ring.style.strokeDashoffset = PIP_CIRC * (1 - s / total);
+  ring.style.stroke           = color;
+  document.getElementById('pip-text').textContent = formatTime(s);
 
-  setTimeout(poll, 500);
+  const ss    = secondsLeft(state.session_deadline, state.session_seconds ?? 600);
+  const sesEl = document.getElementById('pip-session-timer');
+  sesEl.textContent = formatTime(ss);
+  sesEl.classList.toggle('warning', ss <= 120 && ss > 60);
+  sesEl.classList.toggle('urgent',  ss <= 60);
 }
 
 poll();
+setInterval(render, 250);
 </script>
 </body>
 </html>
