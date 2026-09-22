@@ -882,7 +882,11 @@ class JsApi:
         global _close_confirmed
         _close_confirmed = True
         if _main_window:
-            _main_window.destroy()
+            # Destroy after this call has returned its value to JS: on macOS that return goes through
+            # evaluate_js, which blocks forever when it is queued behind the window close
+            t = threading.Timer(0.2, _main_window.destroy)
+            t.daemon = True
+            t.start()
 
     def close_pip(self):
         global _pip_window
@@ -938,6 +942,9 @@ if __name__ == "__main__":
 
         _main_window.events.closing += _on_main_closing
         webview.start()
+        # pywebview can leave a non-daemon thread waiting on evaluate_js for a window that is gone
+        # (macOS), which would keep the process alive without an event loop: "not responding"
+        os._exit(0)
     else:
         import webbrowser
         from threading import Timer
